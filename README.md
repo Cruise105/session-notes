@@ -12,6 +12,17 @@ Your printed session sheet as an app for the Galaxy Tab S9+. It runs in Chrome, 
 - **Shopping notes** for anything else from the session's shopping.
 - **Google Drive sync** between your PC and tablet, the same way the Bestiary does it, plus backup files.
 
+## Random outbreaks (homebrew)
+
+Every in-game week, the app rolls for outbreaks around the world: more often in crowded cities, rarely in the wilds, never for mythic diseases. Season and climate decide which diseases (bad-water sicknesses in warm, wet places and summer; influenza and coughs in the cold). Each has a severity (a few cases, spreading, epidemic) and dies out after a few weeks. Your tablet and PC roll the same outbreaks.
+
+- **World tab** lists them (marked "Rolled"), and location lists show a red badge where one is active.
+- **Moving the party** somewhere with an outbreak asks you to confirm first.
+- **While the party stays there**, each day adds to an exposure prompt on the Session tab: roll a d100 per PC against the number shown and tick who was exposed. Their Infection checks then follow the normal Darker Dungeons rules.
+- **Settings** turns random outbreaks off or sets how often they happen. Each location's population (city, town, wilderness) can be changed when you edit it.
+
+Darker Dungeons has no rules for outbreaks starting on their own, so all of this, including the exposure odds (10%, 25% or 50% a day), is homebrew.
+
 ## Absent players
 
 Each PC in the session's party table has a **Here / Absent** button. While a player is absent, their character sits out the clock: their hunger, thirst, fatigue and temperature don't change, and they're left out of meals, rests and exposures. Training still counts down, since it runs on calendar weeks. The session (and the History list) keeps a record of who was absent, and past sessions you add can be marked too. Each PC's total of missed sessions shows under their name in the party table and on the Party tab.

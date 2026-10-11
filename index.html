@@ -254,6 +254,7 @@
       <label class="field"><span>Temperature adjust (°F)</span><input name="tempAdjust" type="number" inputmode="numeric" step="1"></label>
       <label class="field"><span>Wind</span><select name="wind"><option value="-1">Sheltered (forest)</option><option value="0">Normal</option><option value="1">Windy (open ground)</option></select></label>
     </div>
+    <label class="field"><span>Population (for outbreaks)</span><select name="pop"><option value="city">City</option><option value="town">Town or village</option><option value="wild">Wilderness</option></select></label>
     <label class="check"><input type="checkbox" name="fog"> <span>Often foggy</span></label>
     <label class="check"><input type="checkbox" name="overcast"> <span>Always overcast: the sun never shows clearly</span></label>
     <label class="field"><span>Notes</span><textarea name="notes" rows="2"></textarea></label>
@@ -377,6 +378,8 @@
         <label class="field"><span>Name</span><input id="campaignName" autocomplete="off"></label>
       </div>
       <label class="check"><input type="checkbox" id="survivalToggle"> <span>Use survival conditions (Darker Dungeons) in this campaign</span></label>
+      <div class="ob-set"><label class="check"><input type="checkbox" id="obToggle"> <span>Random outbreaks (homebrew)</span></label>
+        <select id="obFreq" aria-label="How often"><option value="rare">Rarely</option><option value="normal">Sometimes</option><option value="often">Often</option></select></div>
       <div class="row left"><button type="button" class="btn" id="newCampaignBtn">New campaign</button></div>
       <p class="muted small">Each campaign keeps its own party, sessions and in-game date.</p>
     </section>

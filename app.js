@@ -5,8 +5,9 @@ import { initSync } from './sync.js';
 import * as W from './weather.js';
 import * as H from './health.js';
 import * as T from './downtime.js';
+import * as O from './outbreaks.js';
 
-const APP_VERSION = '1.4.5';
+const APP_VERSION = '1.5.0';
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const todayISO = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
@@ -64,6 +65,8 @@ const liveDiseases = () => state.diseases.filter(d => !d.deleted).sort((a, b) =>
 const disById = id => state.diseases.find(d => d.id === id);
 const OPEN_STATES = ['incubating', 'sick', 'declining'];
 const openCases = pcId => state.cases.filter(c => c.campaignId === state.campaignId && !c.deleted && OPEN_STATES.includes(c.state) && (!pcId || c.pcId === pcId));
+const activeOutbreaksAt = locId => state.outbreaks.filter(o => o.campaignId === state.campaignId && o.locationId === locId && O.isActive(o, now()));
+const randomOutbreaksOn = () => campaign().randomOutbreaks !== false;
 const dueCases = () => openCases().filter(c => c.state !== 'declining' && c.dueAt <= now());
 function surv(p) {
   if (!p.survival) p.survival = H.defaultSurvival();
@@ -147,8 +150,10 @@ async function applyClock(t0, t1, { longRest = false } = {}) {
     }
     for (const p of pcs) await save('pcs', p);
   }
+  if (t1 > t0) addOutbreakDays(t0, t1);
   await processCases();
   await processDowntime();
+  await rollOutbreaks();
   return msgs;
 }
 
@@ -168,6 +173,55 @@ async function processDowntime() {
       toast(`${p?.name || 'Someone'} finished training: ${t.what}.`);
     }
   }
+}
+
+// ---------- random outbreaks (homebrew)
+async function rollOutbreaks() {
+  const c = campaign(), cur = O.weekOf(now());
+  if (!randomOutbreaksOn()) { if (c.obWeek !== cur) { c.obWeek = cur; await save('campaigns', c); } return; }
+  let from = c.obWeek == null ? cur - 3 : c.obWeek + 1;
+  if (from > cur) return;
+  from = Math.max(from, cur - 12); // a big jump only rolls the last 12 weeks
+  const have = new Set(state.outbreaks.map(o => o.id)), add = [];
+  for (let w = from; w <= cur; w++) {
+    for (const loc of liveLocations()) {
+      const busy = state.outbreaks.concat(add).some(o => o.campaignId === c.id && o.locationId === loc.id && !o.deleted && !o.endedAt && o.startAt <= (w + 1) * O.WEEK && (!o.endAt || o.endAt > w * O.WEEK));
+      if (busy) continue;
+      const rec = O.rollWeek(c.id, loc, w, state.diseases, c.outbreakFreq || 'normal');
+      if (rec && !have.has(rec.id)) add.push({ ...rec, createdAt: Date.now(), updatedAt: 1 });
+    }
+  }
+  if (add.length) { await db.putMany('outbreaks', add); state.outbreaks.push(...add); }
+  c.obWeek = cur; await save('campaigns', c);
+}
+
+// Days spent somewhere with an outbreak add up into one exposure prompt.
+function addOutbreakDays(t0, t1) {
+  const c = campaign(), d0 = Math.floor(t0 / C.DAY), d1 = Math.floor(t1 / C.DAY);
+  if (d1 <= d0 || !c.locationId) return;
+  for (const o of state.outbreaks.filter(o => o.campaignId === c.id && o.locationId === c.locationId && !o.deleted && !o.endedAt)) {
+    let days = 0;
+    for (let d = d0 + 1; d <= d1; d++) { const t = d * C.DAY; if (o.startAt <= t && (!o.endAt || t < o.endAt)) days++; }
+    if (!days) continue;
+    const p = (c.obPrompts || []).find(x => x.outbreakId === o.id);
+    if (p) p.days += days; else c.obPrompts = [...(c.obPrompts || []), { outbreakId: o.id, days }];
+  }
+}
+
+function obPromptHTML() {
+  const c = campaign(), pcs = presentPcs();
+  return (c.obPrompts || []).map(p => {
+    const o = state.outbreaks.find(x => x.id === p.outbreakId), d = o && disById(o.diseaseId);
+    if (!o || !d) return '';
+    const pct = Math.round(O.exposureChance(o.severity || 'spreading', p.days) * 100);
+    return `<div class="meal ob-prompt" data-obp="${o.id}">
+      <b>Exposure roll: ${esc(d.name)} in ${esc(locById(o.locationId)?.name || '?')}</b>
+      <p class="small">The party has spent ${p.days} day${p.days > 1 ? 's' : ''} there during the outbreak (${esc(O.SEVERITY[o.severity || 'spreading'].label.toLowerCase())}). Roll a d100 for each PC: <b>${pct} or lower</b> means they were exposed. Tick anyone who was.</p>
+      <div class="check-grid">${pcs.map(pc => `<label class="check small"><input type="checkbox" data-obpc="${pc.id}"> ${esc(pc.name)}</label>`).join('')}</div>
+      <div class="row left"><button class="btn primary small" data-act="obp-log">Log exposures</button><button class="btn small" data-act="obp-none">No one was exposed</button></div>
+      <p class="muted small">Exposure odds are homebrew: ${Math.round(O.SEVERITY.few.daily * 100)}% a day for a few cases, ${Math.round(O.SEVERITY.spreading.daily * 100)}% spreading, ${Math.round(O.SEVERITY.epidemic.daily * 100)}% in an epidemic.</p>
+    </div>`;
+  }).join('');
 }
 
 // Diseases in decline get better on their own each period (Darker Dungeons: automatic success).
@@ -456,10 +510,11 @@ function caseLine(cs) {
 function diseaseCard() {
   const list = openCases().sort((a, b) => a.dueAt - b.dueAt);
   const loc = hereLoc();
-  const ob = loc ? state.outbreaks.filter(o => o.campaignId === state.campaignId && !o.deleted && !o.endedAt && o.locationId === loc.id) : [];
+  const ob = loc ? activeOutbreaksAt(loc.id) : [];
   return `<section class="card dis-card" id="sec-diseases">
     <div class="card-head"><h2>Diseases</h2><span class="muted small">Darker Dungeons rules</span><button class="btn small push" data-act="exposure">Log an exposure</button></div>
-    ${ob.map(o => `<p class="outbreak">Going around in ${esc(loc.name)}: <b>${esc(disById(o.diseaseId)?.name || '?')}</b> since ${esc(C.fmtShort(o.startAt))}${o.note ? ` · ${esc(o.note)}` : ''}</p>`).join('')}
+    ${ob.map(o => `<p class="outbreak">Going around in ${esc(loc.name)}: <b>${esc(disById(o.diseaseId)?.name || '?')}</b>${o.severity ? ` (${esc(O.SEVERITY[o.severity].label.toLowerCase())})` : ''} since ${esc(C.fmtShort(o.startAt))}${o.note ? ` · ${esc(o.note)}` : ''}</p>`).join('')}
+    ${obPromptHTML()}
     ${list.length ? `<ul class="case-list">${list.map(caseLine).join('')}</ul>` : '<p class="muted">No one is sick.</p>'}
   </section>`;
 }
@@ -473,11 +528,15 @@ function diseaseSummary(pcId) {
 
 function worldDiseases() {
   const lib = liveDiseases();
-  const obs = state.outbreaks.filter(o => o.campaignId === state.campaignId && !o.deleted).sort((a, b) => (a.endedAt ? 1 : 0) - (b.endedAt ? 1 : 0) || b.startAt - a.startAt);
+  const t = now();
+  const over = o => !O.isActive(o, t);
+  const obs = state.outbreaks.filter(o => o.campaignId === state.campaignId && !o.deleted && o.startAt <= t && (!over(o) || (o.endedAt || o.endAt || 0) > t - 4 * O.WEEK))
+    .sort((a, b) => (over(a) ? 1 : 0) - (over(b) ? 1 : 0) || b.startAt - a.startAt);
   return `<section class="card">
-      <div class="card-head"><h2>Outbreaks</h2><span class="muted small">Diseases going around a place. The Session tab shows them when the party is there.</span><button class="btn small push" data-act="outbreak-new">Start an outbreak</button></div>
-      ${obs.length ? `<ul class="ob-list">${obs.map(o => `<li data-ob="${o.id}" class="${o.endedAt ? 'ended' : ''}"><span><b>${esc(disById(o.diseaseId)?.name || '?')}</b> in ${esc(locById(o.locationId)?.name || '?')} · since ${esc(C.fmtShort(o.startAt))}${o.endedAt ? ` · over ${esc(C.fmtShort(o.endedAt))}` : ''}${o.note ? ` · ${esc(o.note)}` : ''}</span>
-        ${o.endedAt ? '<button class="link-btn" data-act="outbreak-del">Remove</button>' : '<button class="btn small" data-act="outbreak-end">It\'s over</button>'}</li>`).join('')}</ul>` : '<p class="muted">No outbreaks.</p>'}
+      <div class="card-head"><h2>Outbreaks</h2><span class="muted small">Diseases going around a place. The Session tab shows them when the party is there, and asks for exposure rolls.</span><button class="btn small push" data-act="outbreak-new">Start an outbreak</button></div>
+      ${obs.length ? `<ul class="ob-list">${obs.map(o => `<li data-ob="${o.id}" class="${over(o) ? 'ended' : ''}"><span><b>${esc(disById(o.diseaseId)?.name || '?')}</b> in ${esc(locById(o.locationId)?.name || '?')}${o.severity ? ` · ${esc(O.SEVERITY[o.severity].label)}` : ''} · since ${esc(C.fmtShort(o.startAt))}${over(o) ? ` · over ${esc(C.fmtShort(o.endedAt || o.endAt))}` : o.endAt ? ` · <span class="muted">likely over around ${esc(C.fmtShort(o.endAt))}</span>` : ''}${o.random ? ' <span class="badge">Rolled</span>' : ''}${o.note ? ` · ${esc(o.note)}` : ''}</span>
+        ${over(o) ? '<button class="link-btn" data-act="outbreak-del">Remove</button>' : '<button class="btn small" data-act="outbreak-end">It\'s over</button>'}</li>`).join('')}</ul>` : '<p class="muted">No outbreaks.</p>'}
+      <p class="muted small">${randomOutbreaksOn() ? `Outbreaks also start on their own (${esc(O.FREQ[campaign().outbreakFreq || 'normal'].label.toLowerCase())}), more in crowded cities, with the season and climate deciding which diseases. <span class="flag">Homebrew</span>: Darker Dungeons has no rules for this. Change it in Settings.` : 'Random outbreaks are off. Turn them on in Settings.'}</p>
     </section>
     <section class="card">
       <div class="card-head"><h2>Disease library</h2><span class="muted small">Darker Dungeons is third-party, not one of your WotC books.</span><button class="btn small push" data-act="disease-new">Create a disease</button></div>
@@ -579,6 +638,7 @@ function viewWorld() {
   const lib = order.map(g => `<details class="loc-group" ${groups[g].some(l => l.id === loc?.id) ? 'open' : ''}><summary>${esc(g)} <span class="muted">(${groups[g].length})</span></summary>
     <ul class="loc-list">${groups[g].sort((a, b) => a.name.localeCompare(b.name)).map(l => `<li data-loc="${l.id}" class="${l.id === loc?.id ? 'here' : ''}">
       <div class="loc-info"><b>${esc(l.name)}</b><span class="muted small">${esc(W.climateById(l.climate).name)}${l.hemisphere === 'south' ? ' · southern hemisphere' : ''}${+l.tempAdjust ? ` · ${l.tempAdjust > 0 ? '+' : ''}${l.tempAdjust}°F` : ''}${l.wind > 0 ? ' · windy' : l.wind < 0 ? ' · sheltered' : ''}${l.fog ? ' · often foggy' : ''}${l.overcast ? ' · always overcast' : ''}</span>
+        ${activeOutbreaksAt(l.id).map(o => `<span class="badge spent">Outbreak: ${esc(disById(o.diseaseId)?.name || '?')}</span>`).join(' ')}
         ${l.override ? `<span class="badge ${l.override.active ? 'rime' : ''}">${esc(l.override.name || 'Override')}${l.override.active ? '' : ' (off)'}</span>` : ''}</div>
       <div class="loc-btns">${l.id === loc?.id ? '<span class="pill live">Party is here</span>' : '<button class="btn small" data-act="go-loc">Go here</button>'}<button class="btn small" data-act="edit-loc">Edit</button></div>
     </li>`).join('')}</ul></details>`).join('');
@@ -630,7 +690,7 @@ function viewSession() {
       </div>
     </div>
 
-    ${open ? `<nav class="jump" aria-label="Jump to">${[['party', 'Party'], ['notes', 'Notes'], ['ink', 'Ink'], ['diseases', 'Diseases'], ...(survivalOn() ? [['survival', 'Survival']] : []), ['training', 'Training'], ['calder', 'Calder'], ['cards', 'Cards']].map(([id, l]) => `<a href="#sec-${id}" data-jump="${id}">${l}${id === 'diseases' && dueCases().length ? ' <b class="ex">!</b>' : ''}${id === 'calder' && campaignTrades().some(t => t.state === 'searching' && t.dueAt <= now()) ? ' <b class="ex">!</b>' : ''}</a>`).join('')}</nav>` : ''}
+    ${open ? `<nav class="jump" aria-label="Jump to">${[['party', 'Party'], ['notes', 'Notes'], ['ink', 'Ink'], ['diseases', 'Diseases'], ...(survivalOn() ? [['survival', 'Survival']] : []), ['training', 'Training'], ['calder', 'Calder'], ['cards', 'Cards']].map(([id, l]) => `<a href="#sec-${id}" data-jump="${id}">${l}${id === 'diseases' && (dueCases().length || (campaign().obPrompts || []).length) ? ' <b class="ex">!</b>' : ''}${id === 'calder' && campaignTrades().some(t => t.state === 'searching' && t.dueAt <= now()) ? ' <b class="ex">!</b>' : ''}</a>`).join('')}</nav>` : ''}
     ${open ? wxCard() : (s.locationId && locById(s.locationId) ? `<p class="muted small sess-loc">Started in ${esc(locById(s.locationId).name)}${(s.visited || []).length ? `, then ${(s.visited || []).map(v => esc(locById(v.locationId)?.name || '?')).join(', ')}` : ''}.</p>` : '')}
 
     <section class="card" id="sec-party">
@@ -917,6 +977,11 @@ function timeNowHTML() {
 async function moveTo(locId) {
   const c = campaign();
   if (c.locationId === locId) return;
+  const obs = activeOutbreaksAt(locId);
+  if (obs.length) {
+    const lines = obs.map(o => `${disById(o.diseaseId)?.name || 'A disease'} is going around${o.severity ? ` (${O.SEVERITY[o.severity].label.toLowerCase()})` : ''}, since ${C.fmtShort(o.startAt)}.`).join(' ');
+    if (!(await confirmBox(`Outbreak in ${locById(locId).name}`, `${lines} While the party stays there, the app will ask for exposure rolls each day.`, 'Go there anyway'))) return;
+  }
   c.locationId = locId; await save('campaigns', c);
   const s = latestSession();
   if (s && s.endAt == null) { s.visited = [...(s.visited || []), { locationId: locId, at: now() }]; await save('sessions', s); }
@@ -932,7 +997,7 @@ function openLocPicker() {
     const groups = {};
     for (const l of list) (groups[l.region || 'Other'] ||= []).push(l);
     $('#locPickList').innerHTML = Object.keys(groups).sort().map(g => `<div class="pick-group"><h3>${esc(g)}</h3>${groups[g].sort((a, b) => a.name.localeCompare(b.name)).map(l =>
-      `<button type="button" class="pick-item ${l.id === campaign().locationId ? 'here' : ''}" data-pick="${l.id}"><b>${esc(l.name)}</b><span class="muted small">${esc(W.climateById(l.climate).name)}${l.override?.active ? ` · ${esc(l.override.name)}` : ''}</span></button>`).join('')}</div>`).join('') || '<p class="muted">No locations match. You can add one on the World tab.</p>';
+      `<button type="button" class="pick-item ${l.id === campaign().locationId ? 'here' : ''}" data-pick="${l.id}"><b>${esc(l.name)}</b><span class="muted small">${esc(W.climateById(l.climate).name)}${l.override?.active ? ` · ${esc(l.override.name)}` : ''}</span>${activeOutbreaksAt(l.id).map(o => `<span class="badge spent">${esc(disById(o.diseaseId)?.name || 'Outbreak')}</span>`).join(' ')}</button>`).join('')}</div>`).join('') || '<p class="muted">No locations match. You can add one on the World tab.</p>';
   };
   $('#locSearch').value = '';
   $('#locSearch').oninput = e => draw(e.target.value);
@@ -957,6 +1022,7 @@ function openLocEditor(loc) {
   $('#regionList').innerHTML = [...new Set(liveLocations().map(l => l.region))].sort().map(r => `<option value="${esc(r)}">`).join('');
   const L = loc || { name: '', region: '', climate: 'tempinland', hemisphere: 'north', tempAdjust: 0, wind: 0, fog: false, overcast: false, notes: '', override: null };
   f.name.value = L.name; f.region.value = L.region; f.climate.value = L.climate; f.hemisphere.value = L.hemisphere || 'north';
+  f.pop.value = loc ? O.popOf(loc) : 'town';
   f.tempAdjust.value = L.tempAdjust || 0; f.wind.value = String(L.wind || 0); f.fog.checked = !!L.fog; f.overcast.checked = !!L.overcast; f.notes.value = L.notes || '';
   const o = L.override;
   f.hasOverride.checked = !!o;
@@ -981,7 +1047,7 @@ $('#locDlg').addEventListener('close', async () => {
   const loc = editLoc || { id: 'loc-' + uid(), createdAt: Date.now() };
   loc.name = f.name.value.trim() || loc.name || 'Unnamed place';
   loc.region = f.region.value.trim() || 'My locations';
-  loc.climate = f.climate.value; loc.hemisphere = f.hemisphere.value;
+  loc.climate = f.climate.value; loc.hemisphere = f.hemisphere.value; loc.pop = f.pop.value;
   loc.tempAdjust = +f.tempAdjust.value || 0; loc.wind = +f.wind.value || 0;
   loc.fog = f.fog.checked; loc.overcast = f.overcast.checked; loc.notes = f.notes.value.trim();
   loc.override = f.hasOverride.checked ? {
@@ -1025,7 +1091,7 @@ function openExposure() {
   $('#expPcs').innerHTML = presentPcs().map(p => `<label class="check"><input type="checkbox" value="${p.id}"> <span>${esc(p.name)}</span></label>`).join('');
   $('#expDisease').innerHTML = diseaseOptions();
   const loc = hereLoc();
-  const ob = loc ? state.outbreaks.find(o => o.campaignId === state.campaignId && !o.deleted && !o.endedAt && o.locationId === loc.id) : null;
+  const ob = loc ? activeOutbreaksAt(loc.id)[0] : null;
   if (ob) $('#expDisease').value = ob.diseaseId;
   $('#expNote').textContent = `Exposure time: ${C.fmtDateTime(now())}.`;
   $('#expDlg').returnValue = ''; $('#expDlg').showModal();
@@ -1035,17 +1101,22 @@ $('#expDlg').addEventListener('close', async () => {
   const f = $('#expForm'), d = disById(f.disease.value);
   const ids = [...$('#expPcs').querySelectorAll('input:checked')].map(i => i.value);
   if (!ids.length || !d) { toast('Pick at least one character and a disease.'); return; }
+  const { immune, logged } = await createExposures(ids, d, f.route.value.split(':')[0], f.disadv.checked);
+  toast([logged.length ? `${logged.join(', ')} exposed to ${d.name}. Infection check on ${C.fmtShort(now() + H.incubationMins(d))}.` : '', immune.length ? `${immune.join(', ')} ${immune.length > 1 ? 'are' : 'is'} immune.` : ''].filter(Boolean).join(' '));
+  render();
+});
+
+async function createExposures(ids, d, route, disadvantage) {
   const immune = [], logged = [];
   for (const id of ids) {
     const p = state.pcs.find(x => x.id === id);
     if (H.immunityDC(+p.immunity || 0) >= d.dc) { immune.push(p.name); continue; }
-    const cs = { id: uid(), campaignId: state.campaignId, pcId: id, diseaseId: d.id, contactAt: now(), route: f.route.value.split(':')[0], disadvantage: f.disadv.checked,
+    const cs = { id: uid(), campaignId: state.campaignId, pcId: id, diseaseId: d.id, contactAt: now(), route, disadvantage,
       state: 'incubating', stage: 0, dueAt: now() + H.incubationMins(d), bedRest: false, log: [{ at: now(), kind: 'exposed' }], createdAt: Date.now() };
     await save('cases', cs); logged.push(p.name);
   }
-  toast([logged.length ? `${logged.join(', ')} exposed to ${d.name}. Infection check on ${C.fmtShort(now() + H.incubationMins(d))}.` : '', immune.length ? `${immune.join(', ')} ${immune.length > 1 ? 'are' : 'is'} immune.` : ''].filter(Boolean).join(' '));
-  render();
-});
+  return { immune, logged };
+}
 
 let checkCase = null;
 function openCheck(cs) {
@@ -1509,6 +1580,16 @@ $('#view').addEventListener('click', async e => {
     case 'outbreak-del': { const o = state.outbreaks.find(x => x.id === b.closest('[data-ob]').dataset.ob); o.deleted = true; await save('outbreaks', o); break; }
     case 'disease-new': openDisease(null); return;
     case 'past-new': openPast(); return;
+    case 'obp-log': case 'obp-none': {
+      const box = b.closest('[data-obp]'), c = campaign(), o = state.outbreaks.find(x => x.id === box.dataset.obp), d = disById(o.diseaseId);
+      if (act === 'obp-log') {
+        const ids = [...box.querySelectorAll('[data-obpc]:checked')].map(i => i.dataset.obpc);
+        if (!ids.length) { toast('Tick who was exposed, or tap "No one was exposed".'); return; }
+        const r = await createExposures(ids, d, (d.transmission || 'Air').split(',')[0].trim(), false);
+        toast([r.logged.length ? `${r.logged.join(', ')} exposed to ${d.name}. Infection check on ${C.fmtShort(now() + H.incubationMins(d))}.` : '', r.immune.length ? `${r.immune.join(', ')} ${r.immune.length > 1 ? 'are' : 'is'} immune.` : ''].filter(Boolean).join(' '));
+      }
+      c.obPrompts = (c.obPrompts || []).filter(x => x.outbreakId !== o.id); await save('campaigns', c); break;
+    }
     case 'toggle-absent': {
       const set = new Set(s.absent || []);
       if (set.has(pc.id)) set.delete(pc.id); else set.add(pc.id);
@@ -1614,6 +1695,7 @@ function openSettings() {
   sel.innerHTML = state.campaigns.filter(c => !c.deleted).map(c => `<option value="${c.id}" ${c.id === state.campaignId ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
   $('#campaignName').value = campaign().name;
   $('#survivalToggle').checked = survivalOn();
+  $('#obToggle').checked = randomOutbreaksOn(); $('#obFreq').value = campaign().outbreakFreq || 'normal';
   applyTheme(themePref);
   let last = null; try { last = localStorage.getItem('sn-lastBackup'); } catch (_) {}
   $('#lastBackup').textContent = last ? `Last backup saved ${new Date(+last).toLocaleString()}.` : 'No backup saved from this device yet.';
@@ -1631,6 +1713,8 @@ $('#campaignSel').addEventListener('change', async e => {
 $('#campaignName').addEventListener('change', async e => {
   const c = campaign(); c.name = e.target.value.trim() || c.name; await save('campaigns', c); openSettings(); renderHeader();
 });
+$('#obToggle').addEventListener('change', async e => { const c = campaign(); c.randomOutbreaks = e.target.checked; c.obWeek = O.weekOf(now()) - 1; await save('campaigns', c); await rollOutbreaks(); render(); });
+$('#obFreq').addEventListener('change', async e => { const c = campaign(); c.outbreakFreq = e.target.value; await save('campaigns', c); });
 $('#survivalToggle').addEventListener('change', async e => { const c = campaign(); c.survivalOn = e.target.checked; await save('campaigns', c); render(); });
 $('#newCampaignBtn').addEventListener('click', async () => {
   const c = { id: uid(), name: 'New campaign', current: now(), createdAt: Date.now() };
@@ -1743,6 +1827,7 @@ function updateReady() {
   await load();
   indexWeather();
   await processCases();
+  await rollOutbreaks();
   state.sessionId = latestSession()?.id || null;
   render();
   initSync({ toast, build: buildBackupData, merge: mergeBackupData });

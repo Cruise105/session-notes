@@ -465,3 +465,7 @@ tr.absent-row > th { opacity: 1; }
   .sync-btn .syncword { display: none; }
 }
 .field[hidden] { display: none; }
+
+.ob-set { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.ob-set select { min-height: 40px; border: 1px solid var(--line-strong); border-radius: 8px; padding: 4px 10px; background: var(--surface); color: var(--ink); }
+.ob-prompt { border-color: var(--danger); background: var(--warn-soft); }
