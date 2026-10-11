@@ -6,7 +6,7 @@ import * as W from './weather.js';
 import * as H from './health.js';
 import * as T from './downtime.js';
 
-const APP_VERSION = '1.4.4';
+const APP_VERSION = '1.4.5';
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const todayISO = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
@@ -639,6 +639,7 @@ function viewSession() {
         <thead><tr><th>PC</th><th>Max HP</th><th>AC</th><th>Pass. Perc.</th><th>Diseases</th><th>Deaths</th><th>Favor of Fate</th></tr></thead>
         <tbody>${rows.map(({ pc, v }) => `<tr data-pc="${pc?.id || ''}" class="${(open ? (s.absent || []).includes(pc?.id) : v.absent) ? 'absent-row' : ''}">
           <th scope="row"><span class="pc-name">${esc(v.name ?? pc?.name)}</span><span class="pc-sub">${esc(pc?.classes || '')}</span>
+            ${open && pc ? `<span class="missed">${missedCount(pc.id) ? `Missed ${missedCount(pc.id)} session${missedCount(pc.id) > 1 ? 's' : ''}` : 'No sessions missed'}</span>` : ''}
             ${open && pc ? `<button class="here-btn ${(s.absent || []).includes(pc.id) ? 'away' : ''}" data-act="toggle-absent" aria-pressed="${(s.absent || []).includes(pc.id)}">${(s.absent || []).includes(pc.id) ? 'Absent' : 'Here'}</button>` : (v.absent ? '<span class="badge spent">Absent</span>' : '')}</th>
           ${['maxHp', 'ac', 'pp'].map(k => `<td>${open && pc
             ? `<input class="cell-input" type="number" inputmode="numeric" data-stat="${k}" value="${v[k] ?? ''}" placeholder="—" aria-label="${k}">`
@@ -696,6 +697,7 @@ function viewParty() {
       <div class="stat-row">
         ${[['maxHp', 'Max HP'], ['ac', 'AC'], ['pp', 'Pass. Perc.']].map(([k, l]) => `<label class="stat"><span>${l}</span><input class="cell-input" type="number" inputmode="numeric" data-stat="${k}" value="${p[k] ?? ''}" placeholder="—"></label>`).join('')}
         <div class="stat"><span>Deaths</span><b class="deaths big">${p.deaths.length}</b></div>
+        <div class="stat"><span>Sessions missed</span><b class="deaths big">${missedCount(p.id)}</b></div>
         <div class="stat"><span>Favor of Fate</span>${favorBadge(p)}</div>
       </div>
       <div class="pc-cols">
@@ -792,6 +794,7 @@ function snippet(text, q) {
   return (start > 0 ? '…' : '') + esc(text.slice(start, i)) + '<mark>' + esc(text.slice(i, i + q.length)) + '</mark>' + esc(text.slice(i + q.length, end)) + (end < text.length ? '…' : '');
 }
 
+const missedCount = pcId => campaignSessions().filter(x => (x.absent || []).includes(pcId)).length;
 const absentNames = s => (s.absent || []).map(id => state.pcs.find(p => p.id === id)?.name).filter(Boolean).join(', ');
 function viewHistory() {
   const q = fold(state.query.trim());

@@ -14,7 +14,7 @@ Your printed session sheet as an app for the Galaxy Tab S9+. It runs in Chrome, 
 
 ## Absent players
 
-Each PC in the session's party table has a **Here / Absent** button. While a player is absent, their character sits out the clock: their hunger, thirst, fatigue and temperature don't change, and they're left out of meals, rests and exposures. Training still counts down, since it runs on calendar weeks. The session (and the History list) keeps a record of who was absent, and past sessions you add can be marked too.
+Each PC in the session's party table has a **Here / Absent** button. While a player is absent, their character sits out the clock: their hunger, thirst, fatigue and temperature don't change, and they're left out of meals, rests and exposures. Training still counts down, since it runs on calendar weeks. The session (and the History list) keeps a record of who was absent, and past sessions you add can be marked too. Each PC's total of missed sessions shows under their name in the party table and on the Party tab.
 
 ## Adding past sessions
 

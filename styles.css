@@ -386,6 +386,7 @@ table.surv tbody tr:last-child > * { border-bottom: 0; }
 .d6-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 
 /* ---------- attendance */
+.missed { display: block; font-size: 13px; color: var(--muted); font-weight: 400; }
 .here-btn { display: inline-block; margin-top: 4px; padding: 2px 12px; min-height: 30px; border-radius: 999px; border: 1px solid var(--line-strong); background: var(--good-soft); color: var(--good); font-size: 13px; font-weight: 700; }
 .here-btn.away { background: var(--warn-soft); color: var(--danger); border-color: var(--danger); }
 tr.absent-row > * { opacity: .55; }
