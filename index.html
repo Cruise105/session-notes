@@ -174,7 +174,8 @@
 
 <dialog id="trainDlg" class="dlg-wrap">
   <form class="dlg" method="dialog" id="trainForm">
-    <h2>Start training</h2>
+    <h2 id="trainTitle">Start training</h2>
+    <p class="muted small" id="trainEditNote" hidden>After an ASI or a new trainer, change the modifier or trainer here. The share of the training already done is kept, and only the rest is recalculated. Change the start date only to fix a mistake.</p>
     <div class="field-row">
       <label class="field"><span>Who</span><select name="pc" id="trainPc"></select></label>
       <label class="field"><span>Training in</span><select name="kind" id="trainKind"></select></label>
@@ -200,7 +201,7 @@
       <p class="muted small" style="align-self:end">Already training before the app? Set the day they started, or just how much is left, and the start date is worked out for you.</p>
     </div>
     <div class="preview" id="trainPreview"></div>
-    <div class="row"><button class="btn" value="cancel" formnovalidate>Cancel</button><button class="btn primary" value="save">Start training</button></div>
+    <div class="row"><button class="btn" value="cancel" formnovalidate>Cancel</button><button class="btn primary" value="save" id="trainSave">Start training</button></div>
   </form>
 </dialog>
 

@@ -6,7 +6,7 @@ import * as W from './weather.js';
 import * as H from './health.js';
 import * as T from './downtime.js';
 
-const APP_VERSION = '1.4.3';
+const APP_VERSION = '1.4.4';
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const todayISO = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
@@ -502,7 +502,7 @@ function trainingCard() {
         ${st.paused ? '<span class="badge">Paused</span>' : ''}</div>
       <div class="bar" role="progressbar" aria-valuenow="${Math.round(st.frac * 100)}" aria-valuemin="0" aria-valuemax="100"><i style="width:${(st.frac * 100).toFixed(1)}%"></i></div>
       <div class="train-meta small">${C.fmtSpan(left)} left · finishes ${esc(C.fmtShort(st.finishAt))}${st.paused ? ' if resumed now' : ''} · ${T.KINDS[t.kind].hours} hours a day · ${esc(T.TRAINERS[t.trainer].label)}${t.trainerName ? ` (${esc(t.trainerName)})` : ''} · ${t.costPerDay ? `${T.fmtGp(t.costPerDay)} a day, ${T.fmtGp(t.costPerDay * t.days)} in all` : 'no fee'}</div>
-      <div class="case-btns"><button class="btn small" data-act="train-pause">${st.paused ? 'Resume' : 'Pause'}</button><button class="link-btn" data-act="train-remove">Remove</button></div>
+      <div class="case-btns"><button class="btn small" data-act="train-edit">Edit</button><button class="btn small" data-act="train-pause">${st.paused ? 'Resume' : 'Pause'}</button><button class="link-btn" data-act="train-remove">Remove</button></div>
     </li>`;
   };
   return `<section class="card" id="sec-training">
@@ -1156,12 +1156,33 @@ $('#pastDlg').addEventListener('close', async () => {
 });
 
 // ---------- training dialog
-function openTraining() {
+let editTrain = null, startTouched = false;
+function openTraining(t = null) {
+  editTrain = t; startTouched = false;
   const f = $('#trainForm'); f.reset();
+  $('#trainTitle').textContent = t ? 'Edit training' : 'Start training';
+  $('#trainSave').textContent = t ? 'Save changes' : 'Start training';
+  $('#trainEditNote').hidden = !t;
   $('#trainPc').innerHTML = activePcs().map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
   $('#trainKind').innerHTML = Object.entries(T.KINDS).map(([k, v]) => `<option value="${k}">${esc(v.label)}</option>`).join('');
   $('#trainTrainer').innerHTML = Object.entries(T.TRAINERS).map(([k, v]) => `<option value="${k}" ${k === 'none' ? 'selected' : ''}>${esc(v.label)}</option>`).join('');
-  f.mod.value = 0; $('#trainStart').innerHTML = pickerHTML('ts', now()); trainKindChanged(); $('#trainDlg').returnValue = ''; $('#trainDlg').showModal();
+  f.mod.value = 0; $('#trainStart').innerHTML = pickerHTML('ts', t ? t.startAt : now());
+  if (t) {
+    if (!activePcs().some(p => p.id === t.pcId)) $('#trainPc').insertAdjacentHTML('beforeend', `<option value="${t.pcId}">${esc(pcName(t.pcId))}</option>`);
+    f.pc.value = t.pcId; f.kind.value = t.kind; trainKindChanged();
+    if (t.sub) f.sub.value = t.sub;
+    f.what.value = t.what; trainWhatChanged();
+    f.ability.value = t.ability; f.mod.value = t.mod; f.trainer.value = t.trainer; f.trainerName.value = t.trainerName || ''; f.partyMember.checked = !!t.partyMember;
+    f.cost.value = t.costPerDay || 0; trainPreview();
+  } else trainKindChanged();
+  $('#trainDlg').returnValue = ''; $('#trainDlg').showModal();
+}
+// Editing: unless you change the start date, the share already done is kept (half done stays half done) and the rest is recalculated.
+function editedStart(days) {
+  const t = editTrain, st = T.trainingStatus(t, now());
+  const pausedNow = st.paused ? now() - t.pausedAt : 0;
+  const leftDays = Math.ceil((1 - st.frac) * days - 1e-9); // whole days left, rounded up
+  return now() - (days - leftDays) * C.DAY - (t.pausedTotal || 0) - pausedNow;
 }
 function trainKindChanged() {
   const f = $('#trainForm'), k = f.kind.value;
@@ -1200,8 +1221,16 @@ function trainStartAt() { const t = readPicker('ts'); return Math.min(t, now());
 function trainPreview() {
   const f = $('#trainForm');
   const days = T.trainingDays(+f.mod.value, f.trainer.value), weeks = Math.max(1, 10 - (+f.mod.value || 0));
-  const start = trainStartAt(), finish = start + days * C.DAY, left = finish - now();
+  let start = trainStartAt(), finish = start + days * C.DAY, left = finish - now();
   const cost = f.cost.value === '' ? null : +f.cost.value;
+  if (editTrain && !startTouched) {
+    const st = T.trainingStatus(editTrain, now());
+    const pause = (editTrain.pausedTotal || 0) + (st.paused ? now() - editTrain.pausedAt : 0);
+    start = editedStart(days); finish = start + pause + days * C.DAY; left = finish - now();
+    $('#trainPreview').innerHTML = `<b>${weeks} weeks</b> base (10 − modifier)${f.trainer.value !== 'skilled' ? `, ${f.trainer.value === 'none' ? '+50%' : f.trainer.value === 'apprentice' ? '+25%' : '−25%'} for the trainer` : ''} = <b>${C.fmtSpan(days * C.DAY)}</b> (${days} days).
+      ${Math.round(st.frac * 100)}% done so far stays done, so it now finishes <b>${esc(C.fmtShort(finish))}</b> (<b>${C.fmtSpan(Math.max(0, left))} left</b>${editTrain.days !== days ? `, was ${C.fmtSpan(Math.max(0, st.total - st.done))}` : ''}). ${cost ? `Cost: ${T.fmtGp(cost)} a day, <b>${T.fmtGp(cost * days)}</b> in all.` : 'No fee.'}`;
+    return;
+  }
   $('#trainPreview').innerHTML = `<b>${weeks} weeks</b> base (10 − modifier)${f.trainer.value !== 'skilled' ? `, ${f.trainer.value === 'none' ? '+50%' : f.trainer.value === 'apprentice' ? '+25%' : '−25%'} for the trainer` : ''} = <b>${C.fmtSpan(days * C.DAY)}</b> (${days} days).
     ${start < now() ? `Started ${esc(C.fmtShort(start))}. ` : ''}Finishes <b>${esc(C.fmtShort(finish))}</b>${start < now() ? (left > 0 ? ` (<b>${C.fmtSpan(left)} left</b>)` : ' (<b>already finished</b>: it will be marked done)') : ''}. ${cost == null ? 'No cost set.' : cost ? `Cost: ${T.fmtGp(cost)} a day, <b>${T.fmtGp(cost * days)}</b> in all.` : 'No fee.'}`;
 }
@@ -1220,13 +1249,25 @@ function applyLeft() {
   $('#trainStart').innerHTML = pickerHTML('ts', start);
 }
 $('#trainForm').addEventListener('input', e => {
-  if (e.target.closest('#trainStart')) $('#trainForm').left.value = ''; else applyLeft();
+  if (e.target.closest('#trainStart')) { $('#trainForm').left.value = ''; startTouched = true; }
+  else { if (e.target.name === 'left') startTouched = $('#trainForm').left.value !== ''; applyLeft(); }
   trainPreview();
 });
 $('#trainDlg').addEventListener('close', async () => {
   if ($('#trainDlg').returnValue !== 'save') return;
   const f = $('#trainForm');
   const what = (f.what?.value || '').trim() || 'Training';
+  if (editTrain) {
+    const t = editTrain, days = T.trainingDays(+f.mod.value, f.trainer.value);
+    const newStart = startTouched ? trainStartAt() : editedStart(days);
+    Object.assign(t, { pcId: f.pc.value, kind: f.kind.value, what, sub: $('#trainSubWrap').hidden ? null : f.sub.value, ability: f.ability.value, mod: +f.mod.value || 0,
+      trainer: f.trainer.value, trainerName: f.trainerName.value.trim(), partyMember: f.partyMember.checked, costPerDay: f.cost.value === '' ? 0 : +f.cost.value, days, startAt: newStart });
+    if (startTouched) { t.pausedTotal = 0; t.pausedAt = null; }
+    await save('training', t);
+    const st = T.trainingStatus(t, now());
+    toast(st.done >= st.total ? `${pcName(t.pcId)} has finished ${t.what}.` : `${pcName(t.pcId)}: ${t.what} now finishes ${C.fmtShort(st.finishAt)} (${C.fmtSpan(st.total - st.done)} left).`);
+    editTrain = null; await processDowntime(); render(); return;
+  }
   const t = { id: uid(), campaignId: state.campaignId, pcId: f.pc.value, kind: f.kind.value, what: f.kind.value === 'language' && f.sub.value ? `${what}` : what,
     sub: $('#trainSubWrap').hidden ? null : f.sub.value, ability: f.ability.value, mod: +f.mod.value || 0, trainer: f.trainer.value, trainerName: f.trainerName.value.trim(),
     partyMember: f.partyMember.checked, costPerDay: f.cost.value === '' ? 0 : +f.cost.value, days: T.trainingDays(+f.mod.value, f.trainer.value),
@@ -1473,6 +1514,7 @@ $('#view').addEventListener('click', async e => {
     }
     // ----- training
     case 'train-new': openTraining(); return;
+    case 'train-edit': openTraining(state.training.find(x => x.id === b.closest('[data-train]').dataset.train)); return;
     case 'train-pause': {
       const t = state.training.find(x => x.id === b.closest('[data-train]').dataset.train);
       if (t.pausedAt != null) { t.pausedTotal = (t.pausedTotal || 0) + (now() - t.pausedAt); t.pausedAt = null; } else t.pausedAt = now();
