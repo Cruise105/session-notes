@@ -12,6 +12,10 @@ Your printed session sheet as an app for the Galaxy Tab S9+. It runs in Chrome, 
 - **Shopping notes** for anything else from the session's shopping.
 - **Google Drive sync** between your PC and tablet, the same way the Bestiary does it, plus backup files.
 
+## Absent players
+
+Each PC in the session's party table has a **Here / Absent** button. While a player is absent, their character sits out the clock: their hunger, thirst, fatigue and temperature don't change, and they're left out of meals, rests and exposures. Training still counts down, since it runs on calendar weeks. The session (and the History list) keeps a record of who was absent, and past sessions you add can be marked too.
+
 ## Adding past sessions
 
 History tab → **Add a past session**. Enter the session number, the real date, the in-game start and end, where the party was, and the notes (write them or paste them in). **Save and add another** keeps going backward one number at a time. Past sessions only add to your history: they never move the campaign's date or change the party. Open one afterward to add ink pages.

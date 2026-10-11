@@ -385,6 +385,12 @@ table.surv tbody tr:last-child > * { border-bottom: 0; }
 .inline-pair input { width: 70px !important; }
 .d6-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 
+/* ---------- attendance */
+.here-btn { display: inline-block; margin-top: 4px; padding: 2px 12px; min-height: 30px; border-radius: 999px; border: 1px solid var(--line-strong); background: var(--good-soft); color: var(--good); font-size: 13px; font-weight: 700; }
+.here-btn.away { background: var(--warn-soft); color: var(--danger); border-color: var(--danger); }
+tr.absent-row > * { opacity: .55; }
+tr.absent-row > th { opacity: 1; }
+
 /* ---------- jump bar */
 .jump { display: flex; gap: 6px; flex-wrap: wrap; margin: -4px 0 14px; }
 .jump a { padding: 6px 14px; border-radius: 999px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); text-decoration: none; font-size: 15px; font-weight: 500; min-height: 36px; display: inline-flex; align-items: center; gap: 4px; }

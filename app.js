@@ -6,7 +6,7 @@ import * as W from './weather.js';
 import * as H from './health.js';
 import * as T from './downtime.js';
 
-const APP_VERSION = '1.4.1';
+const APP_VERSION = '1.4.2';
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const todayISO = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
@@ -23,6 +23,10 @@ const campaign = () => state.campaigns.find(c => c.id === state.campaignId);
 const now = () => campaign().current;
 const livePcs = () => state.pcs.filter(p => p.campaignId === state.campaignId && !p.deleted).sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.name.localeCompare(b.name));
 const activePcs = () => livePcs().filter(p => p.active !== false);
+// Absent players' characters sit out the clock: no survival changes, meals or party-wide rests while they're away.
+const openSessionNow = () => { const s = state.sessions.filter(x => x.campaignId === state.campaignId && !x.deleted).sort((a, b) => b.number - a.number)[0]; return s && s.endAt == null ? s : null; };
+const isAbsent = id => (openSessionNow()?.absent || []).includes(id);
+const presentPcs = () => activePcs().filter(p => !isAbsent(p.id));
 const campaignSessions = () => state.sessions.filter(s => s.campaignId === state.campaignId && !s.deleted).sort((a, b) => b.number - a.number || b.createdAt - a.createdAt);
 const latestSession = () => campaignSessions()[0];
 const inkFor = s => (s.inkIds || []).map(id => state.ink.find(i => i.id === id)).filter(i => i && !i.deleted);
@@ -103,7 +107,7 @@ function restClear(p) {
 
 // Moving the clock: dawn, noon and dusk change hunger, thirst and fatigue (Darker Dungeons).
 async function applyClock(t0, t1, { longRest = false } = {}) {
-  const pcs = activePcs();
+  const pcs = presentPcs();
   const c = campaign();
   const msgs = [];
   if (survivalOn() && pcs.length) {
@@ -372,7 +376,7 @@ function condCell(p, k) {
 }
 function survivalCard() {
   if (!survivalOn()) return '';
-  const pcs = activePcs(), c = campaign(), scarce = supplies() === 'scarce';
+  const pcs = presentPcs(), c = campaign(), scarce = supplies() === 'scarce';
   for (const p of pcs) if (refreshFlags(p)) saveSoon('pcs', p, 200);
   const meal = scarce && c.mealPending ? `<div class="meal">
       <b>${c.mealPending === 'dawn' ? 'Breakfast' : 'Supper'} time: who's eating and drinking?</b>
@@ -404,6 +408,7 @@ function survivalCard() {
       <label class="check small shelter"><input type="checkbox" data-act-change="sheltered" ${c.sheltered ? 'checked' : ''}> Indoors or sheltered</label>
     </div>
     ${meal}
+    ${activePcs().some(p => isAbsent(p.id)) ? `<p class="muted small">Sitting out while their player is absent: ${esc(activePcs().filter(p => isAbsent(p.id)).map(p => p.name).join(', '))}.</p>` : ''}
     <div class="table-wrap"><table class="surv">
       <thead><tr><th>PC</th><th>Hunger</th><th>Thirst</th><th>Fatigue</th><th>Temperature</th><th>Exhaustion</th><th></th>${scarce ? '<th>Rations</th>' : ''}</tr></thead>
       <tbody>${rows || '<tr><td colspan="8" class="muted">No active characters.</td></tr>'}</tbody>
@@ -632,15 +637,16 @@ function viewSession() {
       <h2>Party</h2>
       <div class="table-wrap"><table class="party">
         <thead><tr><th>PC</th><th>Max HP</th><th>AC</th><th>Pass. Perc.</th><th>Diseases</th><th>Deaths</th><th>Favor of Fate</th></tr></thead>
-        <tbody>${rows.map(({ pc, v }) => `<tr data-pc="${pc?.id || ''}">
-          <th scope="row"><span class="pc-name">${esc(v.name ?? pc?.name)}</span><span class="pc-sub">${esc(pc?.classes || '')}</span></th>
+        <tbody>${rows.map(({ pc, v }) => `<tr data-pc="${pc?.id || ''}" class="${(open ? (s.absent || []).includes(pc?.id) : v.absent) ? 'absent-row' : ''}">
+          <th scope="row"><span class="pc-name">${esc(v.name ?? pc?.name)}</span><span class="pc-sub">${esc(pc?.classes || '')}</span>
+            ${open && pc ? `<button class="here-btn ${(s.absent || []).includes(pc.id) ? 'away' : ''}" data-act="toggle-absent" aria-pressed="${(s.absent || []).includes(pc.id)}">${(s.absent || []).includes(pc.id) ? 'Absent' : 'Here'}</button>` : (v.absent ? '<span class="badge spent">Absent</span>' : '')}</th>
           ${['maxHp', 'ac', 'pp'].map(k => `<td>${open && pc
             ? `<input class="cell-input" type="number" inputmode="numeric" data-stat="${k}" value="${v[k] ?? ''}" placeholder="—" aria-label="${k}">`
             : `<span class="cell-val">${v[k] ?? '—'}</span>`}</td>`).join('')}
           <td class="dis-cell">${open && pc ? diseaseSummary(pc.id) : esc(v.diseases || '—')}</td>
           <td><span class="deaths">${open && pc ? pc.deaths.length : (v.deaths ?? 0)}</span>${open && pc ? `<button class="mini-btn" data-act="death" title="Log a death" aria-label="Log a death for ${esc(pc.name)}">+</button>` : ''}</td>
           <td>${open && pc ? favorBadge(pc) : (v.favorSpent ? '<span class="badge spent">Spent</span>' : '<span class="badge avail">Available</span>')}</td>
-        </tr>`).join('') || `<tr><td colspan="7" class="muted">${open ? 'No active characters. Add them on the Party tab.' : "The party's stats weren't recorded for this session."}</td></tr>`}</tbody>
+        </tr>`).join('') || `<tr><td colspan="7" class="muted">${open ? 'No active characters. Add them on the Party tab.' : `The party's stats weren't recorded for this session.${absentNames(s) ? ` Absent: ${esc(absentNames(s))}.` : ''}`}</td></tr>`}</tbody>
       </table></div>
       ${open ? '' : '<p class="muted small">Stats as they were when this session ended.</p>'}
     </section>
@@ -786,6 +792,7 @@ function snippet(text, q) {
   return (start > 0 ? '…' : '') + esc(text.slice(start, i)) + '<mark>' + esc(text.slice(i, i + q.length)) + '</mark>' + esc(text.slice(i + q.length, end)) + (end < text.length ? '…' : '');
 }
 
+const absentNames = s => (s.absent || []).map(id => state.pcs.find(p => p.id === id)?.name).filter(Boolean).join(', ');
 function viewHistory() {
   const q = fold(state.query.trim());
   const list = campaignSessions();
@@ -808,6 +815,7 @@ function viewHistory() {
     body = list.map(s => `<button class="hist-item" data-act="goto-session" data-id="${s.id}">
       <span class="hist-title">Session ${s.number}<span class="muted"> · ${esc(fmtReal(s.realDate))}</span></span>
       <span class="hist-sub">${esc(C.fmtShort(s.startAt))}${s.endAt != null ? ` → ${esc(C.fmtShort(s.endAt))}` : ' · in progress'}${inkFor(s).length ? ` · ${inkFor(s).length} ink page${inkFor(s).length > 1 ? 's' : ''}` : ''}</span>
+      ${absentNames(s) ? `<span class="hist-sub">Absent: ${esc(absentNames(s))}</span>` : ''}
       <span class="hist-snip">${esc((s.notes || '').slice(0, 180)) || '<i class="muted">No notes</i>'}</span></button>`).join('') || '<p class="muted">No sessions yet.</p>';
   }
   return `<div class="view-head"><h1>History</h1><button class="btn primary" data-act="past-new">Add a past session</button></div>
@@ -823,11 +831,11 @@ async function startSession(number) {
   await save('sessions', s);
   state.sessionId = s.id;
 }
-function snapshotParty() {
-  return activePcs().map(p => ({ pcId: p.id, name: p.name, maxHp: p.maxHp, ac: p.ac, pp: p.pp, deaths: p.deaths.length, favorSpent: !!p.favor?.spent,
+function snapshotParty(absent = openSessionNow()?.absent || []) {
+  return activePcs().map(p => ({ pcId: p.id, name: p.name, maxHp: p.maxHp, ac: p.ac, pp: p.pp, deaths: p.deaths.length, favorSpent: !!p.favor?.spent, absent: absent.includes(p.id),
     diseases: openCases(p.id).map(c => `${disById(c.diseaseId)?.name || '?'}${c.state === 'incubating' ? ' (incubating)' : ` (stage ${c.stage})`}`).join(', ') || '—' }));
 }
-async function endSession(s) { s.endAt = now(); s.party = snapshotParty(); await save('sessions', s); }
+async function endSession(s) { s.party = snapshotParty(s.absent || []); s.endAt = now(); await save('sessions', s); }
 
 function curSession() { return state.sessions.find(s => s.id === state.sessionId); }
 
@@ -1011,7 +1019,7 @@ function diseaseOptions(sel) {
 }
 function openExposure() {
   const f = $('#expForm'); f.reset();
-  $('#expPcs').innerHTML = activePcs().map(p => `<label class="check"><input type="checkbox" value="${p.id}"> <span>${esc(p.name)}</span></label>`).join('');
+  $('#expPcs').innerHTML = presentPcs().map(p => `<label class="check"><input type="checkbox" value="${p.id}"> <span>${esc(p.name)}</span></label>`).join('');
   $('#expDisease').innerHTML = diseaseOptions();
   const loc = hereLoc();
   const ob = loc ? state.outbreaks.find(o => o.campaignId === state.campaignId && !o.deleted && !o.endedAt && o.locationId === loc.id) : null;
@@ -1130,6 +1138,7 @@ function openPast() {
   const start = now() - 7 * C.DAY;
   $('#pastStart').innerHTML = pickerHTML('ps', start);
   $('#pastEnd').innerHTML = pickerHTML('pe', start + 8 * 60);
+  $('#pastAbsent').innerHTML = activePcs().map(p => `<label class="check"><input type="checkbox" value="${p.id}"> <span>${esc(p.name)}</span></label>`).join('');
   $('#pastLoc').innerHTML = `<option value="">Not recorded</option>${liveLocations().sort((a, b) => a.name.localeCompare(b.name)).map(l => `<option value="${l.id}" ${l.id === campaign().locationId ? 'selected' : ''}>${esc(l.name)}</option>`).join('')}`;
   $('#pastDlg').returnValue = ''; $('#pastDlg').showModal();
 }
@@ -1139,7 +1148,7 @@ $('#pastDlg').addEventListener('close', async () => {
   if (campaignSessions().some(x => x.number === number) && !(await confirmBox(`Session ${number} already exists`, 'Add another session with the same number anyway?', 'Add it'))) return;
   const startAt = readPicker('ps'); let endAt = readPicker('pe'); if (endAt < startAt) endAt = startAt;
   const rec = { id: uid(), campaignId: state.campaignId, number, realDate: f.realDate.value, startAt, endAt, locationId: f.loc.value || null, visited: [],
-    party: [], notes: f.notes.value, shopping: f.shopping.value, inkIds: [], past: true, createdAt: Date.now() };
+    party: [], absent: [...$('#pastAbsent').querySelectorAll('input:checked')].map(i => i.value), notes: f.notes.value, shopping: f.shopping.value, inkIds: [], past: true, createdAt: Date.now() };
   await save('sessions', rec);
   toast(`Session ${number} added to your history.`);
   render();
@@ -1280,7 +1289,7 @@ $('#gearDlg').addEventListener('close', async () => {
   if ($('#gearDlg').returnValue !== 'save' || !gearPc) return;
   const g = surv(gearPc).gear, f = $('#gearForm');
   for (const k of Object.keys(g)) g[k] = f[k].checked;
-  const who = f.everyone.checked ? activePcs() : [gearPc];
+  const who = f.everyone.checked ? presentPcs() : [gearPc];
   for (const p of who) { surv(p).gear = { ...g }; refreshFlags(p); await save('pcs', p); }
   render();
 });
@@ -1401,14 +1410,14 @@ $('#view').addEventListener('click', async e => {
     }
     case 'supplies': { const c = campaign(); c.supplies = b.dataset.v; if (c.supplies === 'plentiful') c.mealPending = null; await save('campaigns', c); break; }
     case 'sleep-good': case 'sleep-bad': {
-      for (const p of activePcs()) { const sv = surv(p); sv.fatigue = Math.max(0, sv.fatigue - (act === 'sleep-good' ? 3 : 1)); restClear(p); await save('pcs', p); }
+      for (const p of presentPcs()) { const sv = surv(p); sv.fatigue = Math.max(0, sv.fatigue - (act === 'sleep-good' ? 3 : 1)); restClear(p); await save('pcs', p); }
       toast(act === 'sleep-good' ? 'Everyone slept well: −3 fatigue.' : 'A disturbed night: −1 fatigue.'); break;
     }
-    case 'short-rest': for (const p of activePcs()) { restClear(p); await save('pcs', p); } toast('Short rest: exhaustion from conditions that are better now is gone.'); break;
+    case 'short-rest': for (const p of presentPcs()) { restClear(p); await save('pcs', p); } toast('Short rest: exhaustion from conditions that are better now is gone.'); break;
     case 'ration': { const sv = surv(pc); sv[b.dataset.r] = Math.max(0, sv[b.dataset.r] + +b.dataset.d); await save('pcs', pc); break; }
-    case 'ration-all': for (const p of activePcs()) { const sv = surv(p); sv.food += 2; sv.water += 2; await save('pcs', p); } toast('Everyone got 2 rations of food and 2 of water.'); break;
+    case 'ration-all': for (const p of presentPcs()) { const sv = surv(p); sv.food += 2; sv.water += 2; await save('pcs', p); } toast('Everyone got 2 rations of food and 2 of water.'); break;
     case 'meal-eat': {
-      for (const p of activePcs()) {
+      for (const p of presentPcs()) {
         const sv = surv(p);
         if (document.querySelector(`[data-meal="food"][data-pc="${p.id}"]`)?.checked && sv.food > 0) { sv.food--; sv.hunger = Math.max(0, sv.hunger - 1); }
         if (document.querySelector(`[data-meal="water"][data-pc="${p.id}"]`)?.checked && sv.water > 0) { sv.water--; sv.thirst = Math.max(0, sv.thirst - 1); }
@@ -1442,6 +1451,12 @@ $('#view').addEventListener('click', async e => {
     case 'outbreak-del': { const o = state.outbreaks.find(x => x.id === b.closest('[data-ob]').dataset.ob); o.deleted = true; await save('outbreaks', o); break; }
     case 'disease-new': openDisease(null); return;
     case 'past-new': openPast(); return;
+    case 'toggle-absent': {
+      const set = new Set(s.absent || []);
+      if (set.has(pc.id)) set.delete(pc.id); else set.add(pc.id);
+      s.absent = [...set]; await save('sessions', s);
+      toast(set.has(pc.id) ? `${pc.name} is marked absent. Their survival conditions stay as they are until they're back.` : `${pc.name} is back.`); break;
+    }
     // ----- training
     case 'train-new': openTraining(); return;
     case 'train-pause': {
