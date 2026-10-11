@@ -1,4 +1,4 @@
-# Session Notes (stage 2: world and weather)
+# Session Notes (stage 3: diseases and survival)
 
 Your printed session sheet as an app for the Galaxy Tab S9+. It runs in Chrome, installs to your home screen, and works offline once installed.
 
@@ -11,6 +11,17 @@ Your printed session sheet as an app for the Galaxy Tab S9+. It runs in Chrome, 
 - **Ink pages** for sketches: the pen draws, your finger scrolls, and holding the S Pen's side button erases.
 - **Shopping** as a plain notes box for now. The Calder Ashveil tracker comes in stage 4.
 - **Google Drive sync** between your PC and tablet, the same way the Bestiary does it, plus backup files.
+
+## New in stage 3
+
+- **Diseases (Darker Dungeons).** All 12 diseases from the book are in the library on the World tab, and you can create your own. Log an exposure on the Session tab and the app counts down the incubation on your calendar, then asks for each Infection and Escalation check when it's due. You roll and tap Succeeded or Failed. Decline, relapse, bed rest (advantage), wounds (disadvantage), magical healing, disease immunity, contagion and diagnosis DCs are all handled. The party table has a Diseases column, like your printed sheet.
+- **Outbreaks.** Start one in a location on the World tab, and the Session tab warns you whenever the party is there.
+- **Survival conditions (Darker Dungeons).** Hunger, thirst, fatigue and temperature for every PC. Moving the clock past dawn, noon and dusk applies the book's changes for you. Stage 5–6 adds exhaustion until it's better and they rest.
+- **Supplies switch.** Plentiful: they eat and drink as normal, so only fatigue (and any disease that doubles a rate) moves. Scarce: each PC has food and water rations, and at breakfast and supper the app asks who's eating.
+- **Temperature from the weather.** Each PC's temperature comes from today's weather and the time of day. Set cold weather gear and other protection with the gear button (you can give the whole party the same at once), and tick "Indoors or sheltered" when they're inside.
+- **Diseases that say "gain thirst at twice the normal rate"** really do double it in the survival tracker.
+
+To turn survival conditions off for a campaign, untick them in Settings.
 
 ## New in stage 2
 
@@ -27,7 +38,7 @@ Your printed session sheet as an app for the Galaxy Tab S9+. It runs in Chrome, 
 
 Upload all the files to your `session-notes` repository and replace the old ones. Then close the app completely and open it again while online. It may take one more restart. After this version, updates will restart the app on their own.
 
- (about 10 minutes)
+## One-time setup with GitHub Pages (about 10 minutes)
 
 Use the same GitHub account as the Bestiary. Putting both apps on the same site is what lets them share the party later.
 

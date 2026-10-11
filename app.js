@@ -3,8 +3,9 @@ import * as C from './calendar.js';
 import { openInkEditor, renderThumb } from './ink.js';
 import { initSync } from './sync.js';
 import * as W from './weather.js';
+import * as H from './health.js';
 
-const APP_VERSION = '1.2.1';
+const APP_VERSION = '1.3.0';
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const todayISO = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
@@ -12,7 +13,7 @@ const fmtReal = iso => { if (!iso) return ''; const [y, m, d] = iso.split('-').m
 const fold = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 
 const state = {
-  campaigns: [], pcs: [], sessions: [], ink: [], locations: [], weather: [],
+  campaigns: [], pcs: [], sessions: [], ink: [], locations: [], weather: [], diseases: [], cases: [], outbreaks: [],
   campaignId: null, view: 'session', sessionId: null, calMonth: null, calDay: null, query: '',
 };
 
@@ -52,6 +53,113 @@ function weatherFor(loc, epoch) {
   return rec;
 }
 const todayWx = () => weatherFor(hereLoc(), Math.floor(now() / C.DAY));
+
+// ---------- health helpers
+const liveDiseases = () => state.diseases.filter(d => !d.deleted).sort((a, b) => a.name.localeCompare(b.name));
+const disById = id => state.diseases.find(d => d.id === id);
+const OPEN_STATES = ['incubating', 'sick', 'declining'];
+const openCases = pcId => state.cases.filter(c => c.campaignId === state.campaignId && !c.deleted && OPEN_STATES.includes(c.state) && (!pcId || c.pcId === pcId));
+const dueCases = () => openCases().filter(c => c.state !== 'declining' && c.dueAt <= now());
+function surv(p) {
+  if (!p.survival) p.survival = H.defaultSurvival();
+  const d = H.defaultSurvival();
+  p.survival.exhausting = { ...d.exhausting, ...(p.survival.exhausting || {}) };
+  p.survival.gear = { ...d.gear, ...(p.survival.gear || {}) };
+  return p.survival;
+}
+const survivalOn = () => campaign().survivalOn !== false;
+const supplies = () => campaign().supplies || 'plentiful';
+function doublingFor(p) {
+  const out = { hunger: false, thirst: false, fatigue: false };
+  for (const c of openCases(p.id)) { if (c.state === 'incubating') continue; const d = H.rateDoubling(disById(c.diseaseId), c.stage); for (const k in out) out[k] ||= d[k]; }
+  return out;
+}
+function tempNow(p) {
+  const loc = hereLoc(); if (!loc) return null;
+  const t = now(), ep = Math.floor(t / C.DAY), w = weatherFor(loc, ep);
+  const air = H.tempAt(w, t - ep * C.DAY);
+  return { air, ...H.tempStage(air, surv(p).gear, !!campaign().sheltered, w.wind) };
+}
+function refreshFlags(p) {
+  const sv = surv(p); let changed = false;
+  for (const k of ['hunger', 'thirst', 'fatigue']) { sv[k] = Math.max(0, Math.min(6, sv[k])); if (sv[k] >= 5 && !sv.exhausting[k]) { sv.exhausting[k] = true; changed = true; } }
+  const tn = tempNow(p);
+  if (tn && tn.stage >= 5 && !sv.exhausting.temp) { sv.exhausting.temp = true; changed = true; }
+  return changed;
+}
+function conditionExhaustion(p) {
+  const sv = surv(p), tn = tempNow(p);
+  const plus = Math.min(3, Object.values(sv.exhausting).filter(Boolean).length);
+  const zeros = ['hunger', 'thirst', 'fatigue'].filter(k => sv[k] === 0).length + (tn && tn.stage === 0 ? 1 : 0);
+  return { plus, zeros };
+}
+// A rest clears exhaustion from any condition that's back to stage 4 or better.
+function restClear(p) {
+  const sv = surv(p), tn = tempNow(p);
+  for (const k of ['hunger', 'thirst', 'fatigue']) if (sv[k] <= 4) sv.exhausting[k] = false;
+  if (!tn || tn.stage <= 4) sv.exhausting.temp = false;
+}
+
+// Moving the clock: dawn, noon and dusk change hunger, thirst and fatigue (Darker Dungeons).
+async function applyClock(t0, t1, { longRest = false } = {}) {
+  const pcs = activePcs();
+  const c = campaign();
+  const msgs = [];
+  if (survivalOn() && pcs.length) {
+    const delta = t1 - t0, scarce = supplies() === 'scarce';
+    if (delta >= C.DAY) {
+      // Whole days passing: assume normal days of meals and sleep. Scarce supplies get used up.
+      const days = Math.floor(delta / C.DAY);
+      if (scarce) for (const p of pcs) {
+        const sv = surv(p), need = 2 * days, f = Math.min(sv.food, need), w = Math.min(sv.water, need);
+        sv.food -= f; sv.water -= w; sv.hunger += need - f; sv.thirst += need - w;
+        if (need - f || need - w) msgs.push(`${p.name} ran short`);
+      }
+    } else if (delta > 0) {
+      const marks = H.marksBetween(t0, t1);
+      for (const m of marks) for (const p of pcs) {
+        const sv = surv(p), dbl = doublingFor(p);
+        sv.fatigue += m.fatigue * (dbl.fatigue ? 2 : 1);
+        // With plenty of food and water they eat and drink as normal; only a disease's extra need shows.
+        sv.hunger += m.hunger * (dbl.hunger ? 2 : 1) - (scarce ? 0 : m.hunger);
+        sv.thirst += m.thirst * (dbl.thirst ? 2 : 1) - (scarce ? 0 : m.thirst);
+      }
+      const meal = [...marks].reverse().find(m => m.name !== 'noon');
+      if (scarce && meal) c.mealPending = meal.name;
+    } else if (delta < 0 && delta > -2 * C.DAY) {
+      for (const m of H.marksBetween(t1, t0)) for (const p of pcs) {
+        const sv = surv(p), dbl = doublingFor(p);
+        sv.fatigue -= m.fatigue * (dbl.fatigue ? 2 : 1);
+        sv.hunger -= m.hunger * (dbl.hunger ? 2 : 1) - (supplies() === 'scarce' ? 0 : m.hunger);
+        sv.thirst -= m.thirst * (dbl.thirst ? 2 : 1) - (supplies() === 'scarce' ? 0 : m.thirst);
+      }
+    }
+    for (const p of pcs) {
+      const sv = surv(p);
+      if (longRest) sv.fatigue -= 3;
+      refreshFlags(p);
+      if (longRest) restClear(p);
+    }
+    for (const p of pcs) await save('pcs', p);
+  }
+  await processCases();
+  return msgs;
+}
+
+// Diseases in decline get better on their own each period (Darker Dungeons: automatic success).
+async function processCases() {
+  for (const cs of openCases()) {
+    if (cs.state !== 'declining') continue;
+    const d = disById(cs.diseaseId); let changed = false;
+    while (cs.state === 'declining' && cs.dueAt <= now()) {
+      cs.stage -= 1; changed = true;
+      cs.log.push({ at: cs.dueAt, kind: 'decline', result: 'auto', stage: cs.stage });
+      if (cs.stage <= 0) { cs.state = 'cured'; cs.curedAt = cs.dueAt; break; }
+      cs.dueAt += H.incubationMins(d);
+    }
+    if (changed) await save('cases', cs);
+  }
+}
 
 async function save(store, rec) {
   rec.updatedAt = Date.now();
@@ -102,8 +210,11 @@ function newPc(fields) {
 }
 
 async function load() {
-  const [campaigns, pcs, sessions, ink, locations, weather] = await Promise.all(STORES.map(s => db.all(s)));
-  Object.assign(state, { campaigns, pcs, sessions, ink, locations, weather });
+  const [campaigns, pcs, sessions, ink, locations, weather, diseases, cases, outbreaks] = await Promise.all(STORES.map(s => db.all(s)));
+  Object.assign(state, { campaigns, pcs, sessions, ink, locations, weather, diseases, cases, outbreaks });
+  const haveD = new Set(state.diseases.map(d => d.id));
+  const addD = H.SEED_DISEASES.filter(d => !haveD.has(d.id)).map(d => ({ ...d, stages: d.stages.slice(), updatedAt: 0 }));
+  if (addD.length) { await db.putMany('diseases', addD); state.diseases.push(...addD); }
   if (!campaigns.filter(c => !c.deleted).length) { await seed(); }
   // Locations from the climate guide. Fixed ids and updatedAt 0, so every device adds the same list and any edit wins.
   const have = new Set(state.locations.map(l => l.id));
@@ -229,6 +340,131 @@ function wxCard({ big = false } = {}) {
   </section>`;
 }
 
+// ---------- survival card (Session tab)
+const condLevel = n => (n <= 1 ? 'good' : n === 2 ? 'ok' : n === 3 ? 'mild' : n === 4 ? 'warn' : 'bad');
+function condCell(p, k) {
+  const sv = surv(p), cond = H.CONDITIONS.find(c => c.id === k), n = sv[k];
+  return `<div class="cond lv-${condLevel(n)}" data-k="${k}">
+    <button class="cond-btn" data-act="cond-dec" aria-label="Better ${cond.name.toLowerCase()} for ${esc(p.name)}">−</button>
+    <span class="cond-name">${cond.stages[n]}${sv.exhausting[k] ? ' <b class="ex" title="Causing exhaustion until a rest">+1</b>' : ''}</span>
+    <button class="cond-btn" data-act="cond-inc" aria-label="Worse ${cond.name.toLowerCase()} for ${esc(p.name)}">+</button>
+  </div>`;
+}
+function survivalCard() {
+  if (!survivalOn()) return '';
+  const pcs = activePcs(), c = campaign(), scarce = supplies() === 'scarce';
+  for (const p of pcs) if (refreshFlags(p)) saveSoon('pcs', p, 200);
+  const meal = scarce && c.mealPending ? `<div class="meal">
+      <b>${c.mealPending === 'dawn' ? 'Breakfast' : 'Supper'} time: who's eating and drinking?</b>
+      <div class="meal-grid">${pcs.map(p => { const sv = surv(p); return `<div class="meal-pc"><span>${esc(p.name)}</span>
+        <label class="check small"><input type="checkbox" data-meal="food" data-pc="${p.id}" ${sv.food > 0 ? 'checked' : 'disabled'}> Food (${sv.food})</label>
+        <label class="check small"><input type="checkbox" data-meal="water" data-pc="${p.id}" ${sv.water > 0 ? 'checked' : 'disabled'}> Water (${sv.water})</label></div>`; }).join('')}</div>
+      <div class="row left"><button class="btn primary small" data-act="meal-eat">Eat and drink</button><button class="btn small" data-act="meal-skip">Skip this meal</button></div>
+    </div>` : '';
+  const rows = pcs.map(p => {
+    const sv = surv(p), tn = tempNow(p), ex = conditionExhaustion(p);
+    const best = Math.min(sv.hunger, sv.thirst, sv.fatigue, tn ? tn.stage : 6);
+    const tempCell = tn ? `<div class="cond lv-${condLevel(tn.stage)} temp"><span class="cond-name">${tn.side === 'cold' ? '❄ ' : tn.side === 'hot' ? '☀ ' : ''}${H.CONDITIONS[3].stages[tn.stage]}${sv.exhausting.temp ? ' <b class="ex" title="Causing exhaustion until a rest">+1</b>' : ''}</span>
+        <button class="cond-btn gear" data-act="gear" aria-label="Gear and protection for ${esc(p.name)}" title="Gear and protection">⚙</button></div>` : '<span class="muted small">Pick a location</span>';
+    return `<tr data-pc="${p.id}">
+      <th scope="row"><span class="pc-name">${esc(p.name)}</span></th>
+      <td data-label="Hunger">${condCell(p, 'hunger')}</td><td data-label="Thirst">${condCell(p, 'thirst')}</td><td data-label="Fatigue">${condCell(p, 'fatigue')}</td><td data-label="Temperature">${tempCell}</td>
+      <td class="exh" data-label="Exhaustion" title="Stage 5–6 conditions add 1 each (up to 3); top-stage conditions take 1 away">${ex.plus - ex.zeros > 0 ? `<b>+${ex.plus - ex.zeros}</b>` : '<span class="muted">0</span>'}${ex.plus && ex.zeros ? `<span class="muted small"> (+${ex.plus} −${ex.zeros})</span>` : ''}</td>
+      <td data-label=""><button class="btn small" data-act="stamina">Stamina ${H.STAMINA_DC[best] ? `DC ${H.STAMINA_DC[best]}` : ''}</button></td>
+      ${scarce ? `<td class="rations" data-label="Rations"><span>Food <button class="mini-btn" data-act="ration" data-r="food" data-d="-1">−</button><b>${sv.food}</b><button class="mini-btn" data-act="ration" data-r="food" data-d="1">+</button></span>
+        <span>Water <button class="mini-btn" data-act="ration" data-r="water" data-d="-1">−</button><b>${sv.water}</b><button class="mini-btn" data-act="ration" data-r="water" data-d="1">+</button></span></td>` : ''}
+    </tr>`;
+  }).join('');
+  return `<section class="card surv-card">
+    <div class="card-head"><h2>Survival</h2>
+      <div class="seg small-seg" role="radiogroup" aria-label="Supplies">
+        <button type="button" role="radio" data-act="supplies" data-v="plentiful" aria-checked="${!scarce}">Plentiful supplies</button>
+        <button type="button" role="radio" data-act="supplies" data-v="scarce" aria-checked="${scarce}">Scarce supplies</button>
+      </div>
+      <label class="check small shelter"><input type="checkbox" data-act-change="sheltered" ${c.sheltered ? 'checked' : ''}> Indoors or sheltered</label>
+    </div>
+    ${meal}
+    <div class="table-wrap"><table class="surv">
+      <thead><tr><th>PC</th><th>Hunger</th><th>Thirst</th><th>Fatigue</th><th>Temperature</th><th>Exhaustion</th><th></th>${scarce ? '<th>Rations</th>' : ''}</tr></thead>
+      <tbody>${rows || '<tr><td colspan="8" class="muted">No active characters.</td></tr>'}</tbody>
+    </table></div>
+    <div class="surv-actions">
+      <button class="btn small" data-act="sleep-good">Good night's sleep (−3 fatigue)</button>
+      <button class="btn small" data-act="sleep-bad">Disturbed sleep (−1 fatigue)</button>
+      <button class="btn small" data-act="short-rest">Short rest</button>
+      ${scarce ? '<button class="btn small" data-act="ration-all">Give everyone rations</button>' : ''}
+    </div>
+    <p class="muted small">Darker Dungeons: dawn +1 hunger and thirst, noon +1 fatigue, dusk +1 to all three; stage 5–6 adds a level of exhaustion (up to 3) until it's better and they rest.${scarce ? '' : ' Plentiful supplies: they eat and drink as normal, so hunger and thirst only move for a disease or if you change them.'} Temperature comes from today's weather and the time of day <span class="flag">(homebrew conversion)</span>.</p>
+  </section>`;
+}
+
+// ---------- disease card (Session tab)
+function caseLine(cs) {
+  const d = disById(cs.diseaseId), pc = state.pcs.find(p => p.id === cs.pcId);
+  const due = cs.state !== 'declining' && cs.dueAt <= now();
+  let status;
+  if (cs.state === 'incubating') status = `Incubating · Infection check ${due ? 'due now' : `on ${C.fmtShort(cs.dueAt)}`}`;
+  else if (cs.state === 'sick') status = `Stage ${cs.stage} of 4 · Escalation check ${due ? 'due now' : `on ${C.fmtShort(cs.dueAt)}`}`;
+  else status = `Getting better · stage ${cs.stage} · improves again ${C.fmtShort(cs.dueAt)}`;
+  let contagious = '';
+  if (cs.state !== 'incubating' && d.transmission) {
+    if (cs.stage >= 4) contagious = 'Always contagious';
+    else { const share = H.CONTAGIOUS[cs.stage]; contagious = `Contagious below ${share * 100}% HP${pc?.maxHp ? ` (under ${Math.ceil(pc.maxHp * share)} HP)` : ''}`; }
+  }
+  const effects = cs.state === 'incubating' ? [] : H.activeEffects(d, cs.stage);
+  return `<li class="case ${due ? 'due' : ''} st-${cs.state}" data-case="${cs.id}">
+    <div class="case-top"><div><b>${esc(pc?.name || '?')}</b>: ${esc(d?.name || 'Unknown disease')} <span class="muted small">(DC ${d?.dc}, ${esc(d?.transmission || '')})</span></div>
+      ${due ? '<span class="badge due-badge">Check due</span>' : ''}</div>
+    <div class="case-status">${esc(status)}${cs.bedRest ? ' · <b>bed rest: advantage on the next check</b>' : ''}${cs.disadvantage && cs.state === 'incubating' ? ' · infection check at disadvantage' : ''}</div>
+    ${effects.length ? `<ul class="case-fx">${effects.map((e, i) => `<li><span class="muted">Stage ${i + 1}:</span> ${esc(e)}</li>`).join('')}</ul>` : ''}
+    ${contagious ? `<div class="muted small">${esc(contagious)} · Diagnosis: Medicine (Wisdom or Intelligence) DC ${H.RARITY_DC[d.rarity] || 10}</div>` : ''}
+    <div class="case-btns">
+      ${due ? `<button class="btn small primary" data-act="case-check">${cs.state === 'incubating' ? 'Roll infection check' : 'Roll escalation check'}</button>` : ''}
+      ${cs.state === 'sick' ? `<button class="btn small" data-act="case-bedrest">${cs.bedRest ? 'Cancel bed rest' : 'Bed rest or first aid'}</button>` : ''}
+      ${cs.state !== 'incubating' ? `<button class="btn small" data-act="case-magic">Treated with magic</button>` : ''}
+      ${cs.state === 'declining' ? `<button class="btn small" data-act="case-relapse">Exposed again</button>` : ''}
+      ${cs.state !== 'incubating' && cs.stage >= 4 ? `<button class="btn small danger-text" data-act="case-died">They died</button>` : ''}
+      <button class="link-btn" data-act="case-remove">Remove</button>
+    </div>
+  </li>`;
+}
+function diseaseCard() {
+  const list = openCases().sort((a, b) => a.dueAt - b.dueAt);
+  const loc = hereLoc();
+  const ob = loc ? state.outbreaks.filter(o => o.campaignId === state.campaignId && !o.deleted && !o.endedAt && o.locationId === loc.id) : [];
+  return `<section class="card dis-card">
+    <div class="card-head"><h2>Diseases</h2><span class="muted small">Darker Dungeons rules</span><button class="btn small push" data-act="exposure">Log an exposure</button></div>
+    ${ob.map(o => `<p class="outbreak">Going around in ${esc(loc.name)}: <b>${esc(disById(o.diseaseId)?.name || '?')}</b> since ${esc(C.fmtShort(o.startAt))}${o.note ? ` · ${esc(o.note)}` : ''}</p>`).join('')}
+    ${list.length ? `<ul class="case-list">${list.map(caseLine).join('')}</ul>` : '<p class="muted">No one is sick.</p>'}
+  </section>`;
+}
+
+function diseaseSummary(pcId) {
+  const cs = openCases(pcId);
+  if (!cs.length) return '<span class="muted">—</span>';
+  return cs.map(c => { const d = disById(c.diseaseId); const due = c.state !== 'declining' && c.dueAt <= now();
+    return `<span class="dis-chip ${due ? 'due' : ''}">${esc(d?.name || '?')}${c.state === 'incubating' ? ' (incubating)' : c.state === 'declining' ? ` (better, ${c.stage})` : ` (${c.stage})`}</span>`; }).join(' ');
+}
+
+function worldDiseases() {
+  const lib = liveDiseases();
+  const obs = state.outbreaks.filter(o => o.campaignId === state.campaignId && !o.deleted).sort((a, b) => (a.endedAt ? 1 : 0) - (b.endedAt ? 1 : 0) || b.startAt - a.startAt);
+  return `<section class="card">
+      <div class="card-head"><h2>Outbreaks</h2><span class="muted small">Diseases going around a place. The Session tab shows them when the party is there.</span><button class="btn small push" data-act="outbreak-new">Start an outbreak</button></div>
+      ${obs.length ? `<ul class="ob-list">${obs.map(o => `<li data-ob="${o.id}" class="${o.endedAt ? 'ended' : ''}"><span><b>${esc(disById(o.diseaseId)?.name || '?')}</b> in ${esc(locById(o.locationId)?.name || '?')} · since ${esc(C.fmtShort(o.startAt))}${o.endedAt ? ` · over ${esc(C.fmtShort(o.endedAt))}` : ''}${o.note ? ` · ${esc(o.note)}` : ''}</span>
+        ${o.endedAt ? '<button class="link-btn" data-act="outbreak-del">Remove</button>' : '<button class="btn small" data-act="outbreak-end">It\'s over</button>'}</li>`).join('')}</ul>` : '<p class="muted">No outbreaks.</p>'}
+    </section>
+    <section class="card">
+      <div class="card-head"><h2>Disease library</h2><span class="muted small">Darker Dungeons is third-party, not one of your WotC books.</span><button class="btn small push" data-act="disease-new">Create a disease</button></div>
+      <div class="dis-lib">${lib.map(d => `<details class="dis-item" data-dis="${d.id}"><summary><b>${esc(d.name)}</b> <span class="muted small">${esc(d.rarity)} · DC ${d.dc} · ${H.fmtIncubation(d.incubation)} · ${esc(d.transmission)}</span> <span class="badge ${d.source === 'Homebrew' ? 'spent' : ''}">${esc(d.source)}</span></summary>
+        <p>${esc(d.description)}</p>
+        <ol class="dis-stages">${d.stages.map(st => `<li>${esc(st)}</li>`).join('')}</ol>
+        <p><b>Cured:</b> ${esc(d.cured)}</p>
+        <div class="row left"><button class="btn small" data-act="disease-edit">Edit</button></div>
+      </details>`).join('')}</div>
+    </section>`;
+}
+
 function viewWorld() {
   const loc = hereLoc();
   const ep = Math.floor(now() / C.DAY);
@@ -259,7 +495,8 @@ function viewWorld() {
       <div class="card-head"><h2>Locations</h2><span class="muted small">From the Omnithel Climate Guide. Temperatures and rain chances are estimates, not from a sourcebook.</span>
         <button class="btn small push" data-act="add-loc">Add a location</button></div>
       ${lib}
-    </section>`;
+    </section>
+    ${worldDiseases()}`;
 }
 
 function viewSession() {
@@ -304,18 +541,20 @@ function viewSession() {
     <section class="card">
       <h2>Party</h2>
       <div class="table-wrap"><table class="party">
-        <thead><tr><th>PC</th><th>Max HP</th><th>AC</th><th>Pass. Perc.</th><th>Deaths</th><th>Favor of Fate</th></tr></thead>
+        <thead><tr><th>PC</th><th>Max HP</th><th>AC</th><th>Pass. Perc.</th><th>Diseases</th><th>Deaths</th><th>Favor of Fate</th></tr></thead>
         <tbody>${rows.map(({ pc, v }) => `<tr data-pc="${pc?.id || ''}">
           <th scope="row"><span class="pc-name">${esc(v.name ?? pc?.name)}</span><span class="pc-sub">${esc(pc?.classes || '')}</span></th>
           ${['maxHp', 'ac', 'pp'].map(k => `<td>${open && pc
             ? `<input class="cell-input" type="number" inputmode="numeric" data-stat="${k}" value="${v[k] ?? ''}" placeholder="—" aria-label="${k}">`
             : `<span class="cell-val">${v[k] ?? '—'}</span>`}</td>`).join('')}
+          <td class="dis-cell">${open && pc ? diseaseSummary(pc.id) : esc(v.diseases || '—')}</td>
           <td><span class="deaths">${open && pc ? pc.deaths.length : (v.deaths ?? 0)}</span>${open && pc ? `<button class="mini-btn" data-act="death" title="Log a death" aria-label="Log a death for ${esc(pc.name)}">+</button>` : ''}</td>
           <td>${open && pc ? favorBadge(pc) : (v.favorSpent ? '<span class="badge spent">Spent</span>' : '<span class="badge avail">Available</span>')}</td>
         </tr>`).join('') || `<tr><td colspan="6" class="muted">No active characters. Add them on the Party tab.</td></tr>`}</tbody>
       </table></div>
       ${open ? '' : '<p class="muted small">Stats as they were when this session ended.</p>'}
     </section>
+    ${open ? diseaseCard() + survivalCard() : ''}
 
     <section class="card notes-card">
       <div class="card-head"><h2>Notes</h2><span class="muted small">Write with the S Pen; it turns into text you can search.</span></div>
@@ -493,7 +732,8 @@ async function startSession(number) {
   state.sessionId = s.id;
 }
 function snapshotParty() {
-  return activePcs().map(p => ({ pcId: p.id, name: p.name, maxHp: p.maxHp, ac: p.ac, pp: p.pp, deaths: p.deaths.length, favorSpent: !!p.favor?.spent }));
+  return activePcs().map(p => ({ pcId: p.id, name: p.name, maxHp: p.maxHp, ac: p.ac, pp: p.pp, deaths: p.deaths.length, favorSpent: !!p.favor?.spent,
+    diseases: openCases(p.id).map(c => `${disById(c.diseaseId)?.name || '?'}${c.state === 'incubating' ? ' (incubating)' : ` (stage ${c.stage})`}`).join(', ') || '—' }));
 }
 async function endSession(s) { s.endAt = now(); s.party = snapshotParty(); await save('sessions', s); }
 
@@ -527,7 +767,7 @@ function openPc(pc) {
   const f = $('#pcForm');
   f.reset();
   $('#pcTitle').textContent = pc ? `Edit ${pc.name}` : 'Add a character';
-  for (const k of ['name', 'ancestry', 'classes', 'player', 'maxHp', 'ac', 'pp']) f[k].value = pc?.[k] ?? '';
+  for (const k of ['name', 'ancestry', 'classes', 'player', 'maxHp', 'ac', 'pp', 'immunity']) f[k].value = pc?.[k] ?? '';
   $('#pcDlg').returnValue = '';
   $('#pcDlg').showModal();
 }
@@ -536,7 +776,7 @@ $('#pcDlg').addEventListener('close', async () => {
   const f = $('#pcForm');
   const pc = editPc || newPc({});
   for (const k of ['name', 'ancestry', 'classes', 'player']) pc[k] = f[k].value.trim();
-  for (const k of ['maxHp', 'ac', 'pp']) pc[k] = f[k].value === '' ? null : +f[k].value;
+  for (const k of ['maxHp', 'ac', 'pp', 'immunity']) pc[k] = f[k].value === '' ? null : +f[k].value;
   if (!pc.name) return;
   await save('pcs', pc);
   render();
@@ -555,8 +795,10 @@ function confirmBox(title, body, yes) {
 let toastT;
 function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 3200); }
 
-async function setTime(t) {
-  const c = campaign(); c.current = Math.max(0, t); await save('campaigns', c);
+async function setTime(t, opts = {}) {
+  const c = campaign(), old = c.current; c.current = Math.max(0, t);
+  await applyClock(old, c.current, opts);
+  await save('campaigns', c);
   renderHeader(); $('#timeNow').innerHTML = timeNowHTML();
   if ($('#inkView').hidden) render();
 }
@@ -668,6 +910,162 @@ $('#wxDlg').addEventListener('close', async () => {
   toast("Today's weather set. Tomorrow may carry it on."); render();
 });
 
+// ---------- disease dialogs
+const caseOf = el => state.cases.find(c => c.id === el.closest('[data-case]').dataset.case);
+function diseaseOptions(sel) {
+  const groups = {};
+  for (const d of liveDiseases()) (groups[d.source || 'Other'] ||= []).push(d);
+  return Object.keys(groups).sort().map(g => `<optgroup label="${esc(g)}">${groups[g].map(d => `<option value="${d.id}" ${d.id === sel ? 'selected' : ''}>${esc(d.name)} (${esc(d.rarity)}, DC ${d.dc}, ${H.fmtIncubation(d.incubation)})</option>`).join('')}</optgroup>`).join('');
+}
+function openExposure() {
+  const f = $('#expForm'); f.reset();
+  $('#expPcs').innerHTML = activePcs().map(p => `<label class="check"><input type="checkbox" value="${p.id}"> <span>${esc(p.name)}</span></label>`).join('');
+  $('#expDisease').innerHTML = diseaseOptions();
+  const loc = hereLoc();
+  const ob = loc ? state.outbreaks.find(o => o.campaignId === state.campaignId && !o.deleted && !o.endedAt && o.locationId === loc.id) : null;
+  if (ob) $('#expDisease').value = ob.diseaseId;
+  $('#expNote').textContent = `Exposure time: ${C.fmtDateTime(now())}.`;
+  $('#expDlg').returnValue = ''; $('#expDlg').showModal();
+}
+$('#expDlg').addEventListener('close', async () => {
+  if ($('#expDlg').returnValue !== 'save') return;
+  const f = $('#expForm'), d = disById(f.disease.value);
+  const ids = [...$('#expPcs').querySelectorAll('input:checked')].map(i => i.value);
+  if (!ids.length || !d) { toast('Pick at least one character and a disease.'); return; }
+  const immune = [], logged = [];
+  for (const id of ids) {
+    const p = state.pcs.find(x => x.id === id);
+    if (H.immunityDC(+p.immunity || 0) >= d.dc) { immune.push(p.name); continue; }
+    const cs = { id: uid(), campaignId: state.campaignId, pcId: id, diseaseId: d.id, contactAt: now(), route: f.route.value.split(':')[0], disadvantage: f.disadv.checked,
+      state: 'incubating', stage: 0, dueAt: now() + H.incubationMins(d), bedRest: false, log: [{ at: now(), kind: 'exposed' }], createdAt: Date.now() };
+    await save('cases', cs); logged.push(p.name);
+  }
+  toast([logged.length ? `${logged.join(', ')} exposed to ${d.name}. Infection check on ${C.fmtShort(now() + H.incubationMins(d))}.` : '', immune.length ? `${immune.join(', ')} ${immune.length > 1 ? 'are' : 'is'} immune.` : ''].filter(Boolean).join(' '));
+  render();
+});
+
+let checkCase = null;
+function openCheck(cs) {
+  checkCase = cs;
+  const d = disById(cs.diseaseId), p = state.pcs.find(x => x.id === cs.pcId);
+  const infection = cs.state === 'incubating';
+  $('#checkTitle').textContent = `${infection ? 'Infection' : 'Escalation'} check: ${p?.name}`;
+  const adv = infection ? (cs.disadvantage ? 'with <b>disadvantage</b> (open wounds or repeated exposure)' : '') : (cs.bedRest ? 'with <b>advantage</b> (bed rest or first aid)' : '');
+  $('#checkBody').innerHTML = `<p>${esc(d.name)}: <b>DC ${d.dc} Constitution saving throw</b> ${adv}.</p>
+    <p class="muted small">${infection ? 'Success: not infected. Failure: infected, and the first symptoms (stage 1) begin.' : `Success: the symptoms have peaked; it improves a stage and starts getting better. Failure: it gets worse, to stage ${Math.min(4, cs.stage + 1)}.`}</p>`;
+  $('#checkDlg').returnValue = ''; $('#checkDlg').showModal();
+}
+$('#checkDlg').addEventListener('close', async () => {
+  const r = $('#checkDlg').returnValue, cs = checkCase;
+  if (!cs || (r !== 'success' && r !== 'failure')) return;
+  const d = disById(cs.diseaseId), inc = H.incubationMins(d), p = state.pcs.find(x => x.id === cs.pcId);
+  let msg;
+  if (cs.state === 'incubating') {
+    cs.log.push({ at: now(), kind: 'infection', result: r });
+    if (r === 'success') { cs.state = 'resisted'; msg = `${p.name} fought it off: not infected.`; }
+    else { cs.state = 'sick'; cs.stage = 1; cs.dueAt += inc; msg = `${p.name} has ${d.name}: stage 1.`; }
+  } else {
+    cs.log.push({ at: now(), kind: 'escalation', result: r, adv: cs.bedRest });
+    cs.bedRest = false;
+    if (r === 'success') {
+      cs.stage -= 1; cs.dueAt += inc;
+      if (cs.stage <= 0) { cs.state = 'cured'; cs.curedAt = now(); msg = `${p.name} has recovered from ${d.name}. ${d.cured}`; }
+      else { cs.state = 'declining'; msg = `${p.name}'s ${d.name} is getting better: stage ${cs.stage}.`; }
+    } else { cs.stage = Math.min(4, cs.stage + 1); cs.dueAt += inc; msg = `${p.name}'s ${d.name} gets worse: stage ${cs.stage}.`; }
+  }
+  if (cs.state === 'cured') { p.healthNotes = [...(p.healthNotes || []), { at: now(), text: `Recovered from ${d.name}: ${d.cured}` }]; await save('pcs', p); }
+  await save('cases', cs); toast(msg); render();
+});
+
+let magicCase = null;
+function openMagic(cs) { magicCase = cs; $('#magicForm').reset(); $('#magicDlg').returnValue = ''; $('#magicDlg').showModal(); }
+$('#magicDlg').addEventListener('close', async () => {
+  if ($('#magicDlg').returnValue !== 'save' || !magicCase) return;
+  const cs = magicCase, d = disById(cs.diseaseId), max = H.magicMaxDC(+$('#magicForm').level.value);
+  if (d.dc > max) { toast(`Not strong enough: ${d.name} is DC ${d.dc}, and that magic only works up to DC ${max}.`); return; }
+  cs.state = 'declining'; cs.log.push({ at: now(), kind: 'magic' });
+  await save('cases', cs); toast(`The magic works: ${d.name} is now getting better, a stage at a time.`); render();
+});
+
+function openOutbreak() {
+  $('#obForm').reset();
+  $('#obLoc').innerHTML = liveLocations().sort((a, b) => a.name.localeCompare(b.name)).map(l => `<option value="${l.id}" ${l.id === campaign().locationId ? 'selected' : ''}>${esc(l.name)}</option>`).join('');
+  $('#obDisease').innerHTML = diseaseOptions();
+  $('#obDlg').returnValue = ''; $('#obDlg').showModal();
+}
+$('#obDlg').addEventListener('close', async () => {
+  if ($('#obDlg').returnValue !== 'save') return;
+  const f = $('#obForm');
+  await save('outbreaks', { id: uid(), campaignId: state.campaignId, locationId: f.loc.value, diseaseId: f.disease.value, startAt: now(), endedAt: null, note: f.note.value.trim(), createdAt: Date.now() });
+  render();
+});
+
+let editDis = null;
+function openDisease(d) {
+  editDis = d;
+  const f = $('#disForm'); f.reset();
+  $('#disTitle').textContent = d ? `Edit ${d.name}` : 'Create a disease';
+  const D = d || { name: '', transmission: 'Touch', rarity: 'Common', dc: 15, incubation: 2, description: '', stages: ['', '', '', ''], cured: '' };
+  f.name.value = D.name; f.transmission.value = D.transmission; f.rarity.value = D.rarity; f.dc.value = String(D.dc);
+  const weeks = D.incubation % 7 === 0; f.incN.value = weeks ? D.incubation / 7 : D.incubation; f.incU.value = weeks ? '7' : '1';
+  f.description.value = D.description; f.cured.value = D.cured;
+  ['s1', 's2', 's3', 's4'].forEach((k, i) => { f[k].value = D.stages[i] || ''; });
+  $('#disDelete').hidden = !d;
+  $('#disDlg').returnValue = ''; $('#disDlg').showModal();
+}
+$('#disDelete').addEventListener('click', async () => {
+  if (!editDis) return;
+  $('#disDlg').close();
+  if (!(await confirmBox(`Delete ${editDis.name}?`, 'It leaves the library. Anyone sick with it stays sick until you resolve it.', 'Delete'))) return;
+  editDis.deleted = true; await save('diseases', editDis); render();
+});
+$('#disDlg').addEventListener('close', async () => {
+  if ($('#disDlg').returnValue !== 'save') return;
+  const f = $('#disForm');
+  const d = editDis || { id: 'dis-' + uid(), source: 'Homebrew', createdAt: Date.now() };
+  d.name = f.name.value.trim() || 'Unnamed disease'; d.transmission = f.transmission.value.trim(); d.rarity = f.rarity.value; d.dc = +f.dc.value;
+  d.incubation = Math.max(1, +f.incN.value || 1) * +f.incU.value; d.description = f.description.value.trim(); d.cured = f.cured.value.trim();
+  d.stages = ['s1', 's2', 's3', 's4'].map(k => f[k].value.trim());
+  await save('diseases', d); render();
+});
+
+// ---------- survival dialogs
+let gearPc = null;
+function openGear(p) {
+  gearPc = p; const g = surv(p).gear, f = $('#gearForm');
+  $('#gearTitle').textContent = `${p.name}: protection`;
+  for (const k of Object.keys(g)) f[k].checked = !!g[k];
+  f.everyone.checked = false;
+  $('#gearDlg').returnValue = ''; $('#gearDlg').showModal();
+}
+$('#gearDlg').addEventListener('close', async () => {
+  if ($('#gearDlg').returnValue !== 'save' || !gearPc) return;
+  const g = surv(gearPc).gear, f = $('#gearForm');
+  for (const k of Object.keys(g)) g[k] = f[k].checked;
+  const who = f.everyone.checked ? activePcs() : [gearPc];
+  for (const p of who) { surv(p).gear = { ...g }; refreshFlags(p); await save('pcs', p); }
+  render();
+});
+
+let stamPc = null;
+function openStamina(p) {
+  stamPc = p; const sv = surv(p), tn = tempNow(p);
+  const stages = { hunger: sv.hunger, thirst: sv.thirst, fatigue: sv.fatigue, ...(tn ? { temperature: tn.stage } : {}) };
+  const best = Math.min(...Object.values(stages)), dc = H.STAMINA_DC[best];
+  $('#stamTitle').textContent = `Stamina check: ${p.name}`;
+  $('#stamBody').innerHTML = dc
+    ? `<p><b>DC ${dc} Constitution saving throw</b>, from their best condition.</p><p class="muted small">After a strenuous event. On a failure, roll a d6 to see which condition gets worse.</p>`
+    : `<p>Their best condition is at its top stage, so there's no check to make.</p>`;
+  $('#stamRow').hidden = false; $('#stamD6').hidden = true; $('#stamFail').hidden = !dc;
+  $('#stamDlg').returnValue = ''; $('#stamDlg').showModal();
+}
+$('#stamFail').addEventListener('click', () => { $('#stamRow').hidden = true; $('#stamD6').hidden = false; });
+$('#stamD6').addEventListener('click', async e => {
+  const b = e.target.closest('[data-d6]'); if (!b || !stamPc) return;
+  const sv = surv(stamPc); sv[b.dataset.d6] = Math.min(6, sv[b.dataset.d6] + 1); refreshFlags(stamPc);
+  await save('pcs', stamPc); $('#stamDlg').close(); toast(`${stamPc.name}: +1 ${b.dataset.d6}.`); render();
+});
+
 // ---------- ink
 async function openInk(page) {
   const view = $('#inkView');
@@ -758,6 +1156,54 @@ $('#view').addEventListener('click', async e => {
       toast(`New weather: ${W.describe(rec)}, ${W.fmtF(rec.low)} to ${W.fmtF(rec.high)}.`); break;
     }
     case 'wx-set': openWxSet(); return;
+    // ----- survival
+    case 'cond-inc': case 'cond-dec': {
+      const k = b.closest('[data-k]').dataset.k, sv = surv(pc);
+      sv[k] = Math.max(0, Math.min(6, sv[k] + (act === 'cond-inc' ? 1 : -1))); refreshFlags(pc); await save('pcs', pc); break;
+    }
+    case 'supplies': { const c = campaign(); c.supplies = b.dataset.v; if (c.supplies === 'plentiful') c.mealPending = null; await save('campaigns', c); break; }
+    case 'sleep-good': case 'sleep-bad': {
+      for (const p of activePcs()) { const sv = surv(p); sv.fatigue = Math.max(0, sv.fatigue - (act === 'sleep-good' ? 3 : 1)); restClear(p); await save('pcs', p); }
+      toast(act === 'sleep-good' ? 'Everyone slept well: −3 fatigue.' : 'A disturbed night: −1 fatigue.'); break;
+    }
+    case 'short-rest': for (const p of activePcs()) { restClear(p); await save('pcs', p); } toast('Short rest: exhaustion from conditions that are better now is gone.'); break;
+    case 'ration': { const sv = surv(pc); sv[b.dataset.r] = Math.max(0, sv[b.dataset.r] + +b.dataset.d); await save('pcs', pc); break; }
+    case 'ration-all': for (const p of activePcs()) { const sv = surv(p); sv.food += 2; sv.water += 2; await save('pcs', p); } toast('Everyone got 2 rations of food and 2 of water.'); break;
+    case 'meal-eat': {
+      for (const p of activePcs()) {
+        const sv = surv(p);
+        if (document.querySelector(`[data-meal="food"][data-pc="${p.id}"]`)?.checked && sv.food > 0) { sv.food--; sv.hunger = Math.max(0, sv.hunger - 1); }
+        if (document.querySelector(`[data-meal="water"][data-pc="${p.id}"]`)?.checked && sv.water > 0) { sv.water--; sv.thirst = Math.max(0, sv.thirst - 1); }
+        await save('pcs', p);
+      }
+      const c = campaign(); c.mealPending = null; await save('campaigns', c); break;
+    }
+    case 'meal-skip': { const c = campaign(); c.mealPending = null; await save('campaigns', c); break; }
+    case 'gear': openGear(pc); return;
+    case 'stamina': openStamina(pc); return;
+    // ----- diseases
+    case 'exposure': openExposure(); return;
+    case 'case-check': openCheck(caseOf(b)); return;
+    case 'case-bedrest': { const cs = caseOf(b); cs.bedRest = !cs.bedRest; await save('cases', cs); break; }
+    case 'case-magic': openMagic(caseOf(b)); return;
+    case 'case-relapse': {
+      const cs = caseOf(b); cs.state = 'sick'; cs.log.push({ at: now(), kind: 'relapse', stage: cs.stage });
+      await save('cases', cs); toast('Relapse: it stops getting better, and the next check is rolled as normal.'); break;
+    }
+    case 'case-died': {
+      const cs = caseOf(b), pcx = state.pcs.find(p => p.id === cs.pcId), d = disById(cs.diseaseId);
+      cs.state = 'ended'; cs.log.push({ at: now(), kind: 'died', stage: cs.stage }); await save('cases', cs);
+      openDeath(pcx); $('#deathForm').note.value = `Died of ${d?.name || 'disease'}`; return;
+    }
+    case 'case-remove': {
+      if (!(await confirmBox('Remove this case?', 'Use this to fix a mistake. It disappears from the list and the party table.', 'Remove'))) return;
+      const cs = caseOf(b); cs.deleted = true; await save('cases', cs); break;
+    }
+    case 'outbreak-new': openOutbreak(); return;
+    case 'outbreak-end': { const o = state.outbreaks.find(x => x.id === b.closest('[data-ob]').dataset.ob); o.endedAt = now(); await save('outbreaks', o); break; }
+    case 'outbreak-del': { const o = state.outbreaks.find(x => x.id === b.closest('[data-ob]').dataset.ob); o.deleted = true; await save('outbreaks', o); break; }
+    case 'disease-new': openDisease(null); return;
+    case 'disease-edit': openDisease(disById(b.closest('[data-dis]').dataset.dis)); return;
     default: return;
   }
   render();
@@ -781,6 +1227,7 @@ $('#view').addEventListener('input', e => {
 
 $('#view').addEventListener('change', async e => {
   const t = e.target;
+  if (t.dataset.actChange === 'sheltered') { const c = campaign(); c.sheltered = t.checked; await save('campaigns', c); render(); return; }
   const s = curSession();
   if (t.dataset.field === 'number' && s) { s.number = Math.max(1, +t.value || s.number); await save('sessions', s); render(); return; }
   if (t.dataset.field === 'realDate' && s) { s.realDate = t.value; await save('sessions', s); return; }
@@ -802,7 +1249,7 @@ $('#timeDlg').addEventListener('click', async e => {
   const b = e.target.closest('[data-adv]'); if (!b) return;
   const v = b.dataset.adv;
   if (v === 'dawn') { const d = C.fromMinutes(now()); let t = d.epoch * C.DAY + 360; if (t <= now()) t += C.DAY; await setTime(t); }
-  else await setTime(now() + +v);
+  else await setTime(now() + +v, { longRest: v === '480' });
   $('#timePicker').innerHTML = pickerHTML('tp', now());
 });
 $('#timeSetBtn').addEventListener('click', async () => { await setTime(readPicker('tp')); toast('In-game date set.'); });
@@ -812,6 +1259,7 @@ function openSettings() {
   const sel = $('#campaignSel');
   sel.innerHTML = state.campaigns.filter(c => !c.deleted).map(c => `<option value="${c.id}" ${c.id === state.campaignId ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
   $('#campaignName').value = campaign().name;
+  $('#survivalToggle').checked = survivalOn();
   applyTheme(themePref);
   let last = null; try { last = localStorage.getItem('sn-lastBackup'); } catch (_) {}
   $('#lastBackup').textContent = last ? `Last backup saved ${new Date(+last).toLocaleString()}.` : 'No backup saved from this device yet.';
@@ -829,6 +1277,7 @@ $('#campaignSel').addEventListener('change', async e => {
 $('#campaignName').addEventListener('change', async e => {
   const c = campaign(); c.name = e.target.value.trim() || c.name; await save('campaigns', c); openSettings(); renderHeader();
 });
+$('#survivalToggle').addEventListener('change', async e => { const c = campaign(); c.survivalOn = e.target.checked; await save('campaigns', c); render(); });
 $('#newCampaignBtn').addEventListener('click', async () => {
   const c = { id: uid(), name: 'New campaign', current: now(), createdAt: Date.now() };
   await save('campaigns', c); state.campaignId = c.id; await db.setMeta('campaignId', c.id);
@@ -939,6 +1388,7 @@ function updateReady() {
 (async function boot() {
   await load();
   indexWeather();
+  await processCases();
   state.sessionId = latestSession()?.id || null;
   render();
   initSync({ toast, build: buildBackupData, merge: mergeBackupData });

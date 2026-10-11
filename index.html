@@ -46,6 +46,109 @@
 
 <div id="inkView" class="ink-view" hidden></div>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
+<dialog id="expDlg" class="dlg-wrap">
+  <form class="dlg" method="dialog" id="expForm">
+    <h2>Log an exposure</h2>
+    <p class="muted small">Contact starts the incubation period. When it's over, the app asks you for the Infection check (Constitution save).</p>
+    <div class="field"><span>Who was exposed?</span><div id="expPcs" class="check-grid"></div></div>
+    <label class="field"><span>Disease</span><select name="disease" id="expDisease"></select></label>
+    <label class="field"><span>How</span><select name="route">
+      <option>Direct contact: touched someone infected, or blood, sweat or pus</option>
+      <option>Indirect contact: touched something contaminated</option>
+      <option>Bite: a fly, tick, leech or diseased creature</option>
+      <option>Consumption: bad water or food</option>
+      <option>Air: within 5 feet, or a contaminated room</option>
+    </select></label>
+    <label class="check"><input type="checkbox" name="disadv"> <span>Open wounds, or exposed more than once: the Infection check has disadvantage</span></label>
+    <p class="muted small" id="expNote"></p>
+    <div class="row"><button class="btn" value="cancel" formnovalidate>Cancel</button><button class="btn primary" value="save">Log exposure</button></div>
+  </form>
+</dialog>
+
+<dialog id="checkDlg" class="dlg-wrap">
+  <form class="dlg narrow" method="dialog">
+    <h2 id="checkTitle"></h2>
+    <div id="checkBody"></div>
+    <div class="row"><button class="btn" value="cancel">Not yet</button><button class="btn" value="failure">Failed</button><button class="btn primary" value="success">Succeeded</button></div>
+  </form>
+</dialog>
+
+<dialog id="magicDlg" class="dlg-wrap">
+  <form class="dlg narrow" method="dialog" id="magicForm">
+    <h2>Treated with magic</h2>
+    <p class="muted small">Darker Dungeons: magic doesn't purge a disease at once, it sends it into decline, if the magic is strong enough for the disease's DC.</p>
+    <label class="field"><span>The magic used</span><select name="level">
+      <option value="5">Lesser Restoration, Lay on Hands, or other magic up to 5th level (works up to DC 15)</option>
+      <option value="8">6th to 8th level, like Heal (works up to DC 25)</option>
+      <option value="9">9th level, like Mass Heal (works up to DC 30)</option>
+    </select></label>
+    <div class="row"><button class="btn" value="cancel">Cancel</button><button class="btn primary" value="save">Apply</button></div>
+  </form>
+</dialog>
+
+<dialog id="disDlg" class="dlg-wrap">
+  <form class="dlg" method="dialog" id="disForm">
+    <h2 id="disTitle">Disease</h2>
+    <div class="field-row">
+      <label class="field"><span>Name</span><input name="name" required autocomplete="off"></label>
+      <label class="field"><span>Transmission</span><input name="transmission" autocomplete="off" placeholder="Touch, Air"></label>
+    </div>
+    <div class="field-row three">
+      <label class="field"><span>Rarity</span><select name="rarity"><option>Common</option><option>Rare</option><option>Mythic</option></select></label>
+      <label class="field"><span>DC</span><select name="dc"><option>5</option><option>10</option><option>15</option><option>20</option><option>25</option><option>30</option></select></label>
+      <label class="field"><span>Incubation</span><span class="inline-pair"><input name="incN" type="number" inputmode="numeric" min="1" value="1"><select name="incU"><option value="1">days</option><option value="7">weeks</option></select></span></label>
+    </div>
+    <p class="muted small">DC 5–10: most people shake it off. 15–20: needs bed rest or medicine. 25–30: almost no one recovers. Incubation is also how often it can get worse.</p>
+    <label class="field"><span>Description</span><textarea name="description" rows="2"></textarea></label>
+    <label class="field"><span>Stage 1</span><textarea name="s1" rows="2"></textarea></label>
+    <label class="field"><span>Stage 2</span><textarea name="s2" rows="2"></textarea></label>
+    <label class="field"><span>Stage 3</span><textarea name="s3" rows="2"></textarea></label>
+    <label class="field"><span>Stage 4</span><textarea name="s4" rows="2"></textarea></label>
+    <label class="field"><span>When cured</span><textarea name="cured" rows="2"></textarea></label>
+    <p class="muted small">Effects add up: stage 3 has stages 1 to 3. Writing "gain thirst at twice the normal rate" (or hunger, or fatigue) makes the survival tracker double it.</p>
+    <div class="row">
+      <button class="btn danger-text" type="button" id="disDelete">Delete disease</button><span class="spacer"></span>
+      <button class="btn" value="cancel" formnovalidate>Cancel</button><button class="btn primary" value="save">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="obDlg" class="dlg-wrap">
+  <form class="dlg narrow" method="dialog" id="obForm">
+    <h2>Start an outbreak</h2>
+    <label class="field"><span>Where</span><select name="loc" id="obLoc"></select></label>
+    <label class="field"><span>Disease</span><select name="disease" id="obDisease"></select></label>
+    <label class="field"><span>Note</span><input name="note" autocomplete="off" placeholder="Started in the refugee camps"></label>
+    <div class="row"><button class="btn" value="cancel">Cancel</button><button class="btn primary" value="save">Start it</button></div>
+  </form>
+</dialog>
+
+<dialog id="gearDlg" class="dlg-wrap">
+  <form class="dlg narrow" method="dialog" id="gearForm">
+    <h2 id="gearTitle">Protection</h2>
+    <label class="check"><input type="checkbox" name="coldGear"> <span>Cold weather gear: thick furs and cloaks (2 stages better in the cold)</span></label>
+    <label class="check"><input type="checkbox" name="coldAdapted"> <span>Adapted to cold climates (1 stage better)</span></label>
+    <label class="check"><input type="checkbox" name="coldRes"> <span>Resistant or immune to cold damage (never worse than Noticeable)</span></label>
+    <label class="check"><input type="checkbox" name="heatAdapted"> <span>Adapted to hot climates (1 stage better in the heat)</span></label>
+    <label class="check"><input type="checkbox" name="heatRes"> <span>Resistant or immune to fire damage (never worse than Noticeable)</span></label>
+    <label class="check"><input type="checkbox" name="everyone"> <span><b>Give the whole party this same protection</b></span></label>
+    <p class="muted small">Being indoors or sheltered is set for the whole party on the Survival card. These step sizes are homebrew; Darker Dungeons leaves them to the GM.</p>
+    <div class="row"><button class="btn" value="cancel">Cancel</button><button class="btn primary" value="save">Save</button></div>
+  </form>
+</dialog>
+
+<dialog id="stamDlg" class="dlg-wrap">
+  <form class="dlg narrow" method="dialog">
+    <h2 id="stamTitle">Stamina check</h2>
+    <div id="stamBody"></div>
+    <div class="row" id="stamRow"><button class="btn" value="cancel">Cancel</button><button class="btn" type="button" id="stamFail">Failed</button><button class="btn primary" value="ok">Succeeded</button></div>
+    <div id="stamD6" hidden>
+      <p><b>Roll a d6 and tap the result:</b></p>
+      <div class="d6-grid"><button class="btn" type="button" data-d6="hunger">1–2: +1 hunger</button><button class="btn" type="button" data-d6="thirst">3–4: +1 thirst</button><button class="btn" type="button" data-d6="fatigue">5–6: +1 fatigue</button></div>
+    </div>
+  </form>
+</dialog>
+
 <div id="updateBar" class="update-bar" hidden><span>A new version of Session Notes is ready.</span><button class="btn primary small" type="button">Restart now</button></div>
 
 <dialog id="locPickDlg" class="dlg-wrap">
@@ -168,7 +271,11 @@
       <label class="field"><span>Ancestry</span><input name="ancestry" autocomplete="off" placeholder="Gold Dragonborn"></label>
       <label class="field"><span>Class &amp; level</span><input name="classes" autocomplete="off" placeholder="Monk 7 (Way of the Long Death)"></label>
     </div>
-    <label class="field"><span>Player</span><input name="player" autocomplete="off"></label>
+    <div class="field-row">
+      <label class="field"><span>Player</span><input name="player" autocomplete="off"></label>
+      <label class="field"><span>Disease immunity level</span><input name="immunity" type="number" inputmode="numeric" min="0" max="20" placeholder="0 = none"></label>
+    </div>
+    <p class="muted small">For features like a paladin's Divine Health, enter the class level. Darker Dungeons: levels 1–5 resist up to DC 15, 6–10 up to DC 20, 11–15 up to DC 25, 16+ every disease.</p>
     <div class="field-row three">
       <label class="field"><span>Max HP</span><input name="maxHp" type="number" inputmode="numeric" min="0"></label>
       <label class="field"><span>AC</span><input name="ac" type="number" inputmode="numeric" min="0"></label>
@@ -190,6 +297,7 @@
         <label class="field"><span>Current campaign</span><select id="campaignSel"></select></label>
         <label class="field"><span>Name</span><input id="campaignName" autocomplete="off"></label>
       </div>
+      <label class="check"><input type="checkbox" id="survivalToggle"> <span>Use survival conditions (Darker Dungeons) in this campaign</span></label>
       <div class="row left"><button type="button" class="btn" id="newCampaignBtn">New campaign</button></div>
       <p class="muted small">Each campaign keeps its own party, sessions and in-game date.</p>
     </section>
