@@ -308,6 +308,20 @@
   <form class="dlg" method="dialog">
     <h2>In-game time</h2>
     <div class="time-now" id="timeNow"></div>
+    <div class="clock-set">
+      <label class="field"><span>Time of day</span><input type="time" id="clockInput"></label>
+      <button type="button" class="btn primary" id="clockSetBtn">Set time</button>
+    </div>
+    <div class="clock-quick">
+      <button type="button" class="btn small" data-tod="360">Dawn 6:00</button>
+      <button type="button" class="btn small" data-tod="540">Morning 9:00</button>
+      <button type="button" class="btn small" data-tod="720">Noon 12:00</button>
+      <button type="button" class="btn small" data-tod="900">Afternoon 3:00</button>
+      <button type="button" class="btn small" data-tod="1080">Dusk 6:00</button>
+      <button type="button" class="btn small" data-tod="1260">Night 9:00</button>
+      <button type="button" class="btn small" data-tod="0">Midnight</button>
+    </div>
+    <p class="muted small">Setting a time moves forward to the next time it's that o'clock: later today, or tomorrow if it has passed.</p>
     <div class="time-grid">
       <button type="button" class="btn" data-adv="10">+10 min</button>
       <button type="button" class="btn" data-adv="60">+1 hour</button>
@@ -381,7 +395,8 @@
       <label class="check"><input type="checkbox" id="survivalToggle"> <span>Use survival conditions (Darker Dungeons) in this campaign</span></label>
       <div class="ob-set"><label class="check"><input type="checkbox" id="obToggle"> <span>Random outbreaks (homebrew)</span></label>
         <select id="obFreq" aria-label="How often"><option value="rare">Rarely</option><option value="normal">Sometimes</option><option value="often">Often</option></select></div>
-      <div class="row left"><button type="button" class="btn" id="newCampaignBtn">New campaign</button></div>
+      <div id="combineBox" class="combine"></div>
+      <div class="row left"><button type="button" class="btn" id="newCampaignBtn">New campaign</button><button type="button" class="btn danger-text" id="deleteCampaignBtn">Delete this campaign</button></div>
       <p class="muted small">Each campaign keeps its own party, sessions and in-game date.</p>
     </section>
     <section class="set">

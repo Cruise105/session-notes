@@ -7,7 +7,7 @@ import * as H from './health.js';
 import * as T from './downtime.js';
 import * as O from './outbreaks.js';
 
-const APP_VERSION = '1.5.2';
+const APP_VERSION = '1.6.1';
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const todayISO = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
@@ -44,19 +44,32 @@ let wxSaveT;
 function queueWx(rec) { wxToSave.push(rec); clearTimeout(wxSaveT); wxSaveT = setTimeout(() => { const l = wxToSave; wxToSave = []; db.putMany('weather', l); }, 300); }
 
 // Returns the weather for a location and day, rolling it (and any days in between, so streaks carry) if needed.
+// Weather runs in fixed 14-day blocks: the first day of a block is a fresh roll and each later day builds on the one before.
+// That way every device works out exactly the same weather for a day, whatever it has or hasn't rolled before.
+const WX_V = 2, BLOCK = 14;
+const wxUsable = r => r && (r.manual || r.rerolls || r.v === WX_V);
 function weatherFor(loc, epoch) {
   if (!loc) return null;
   const hit = wxIndex.get(wxId(loc.id, epoch));
-  if (hit) return hit;
-  let start = epoch, prev = null;
-  for (let e = epoch - 1; e >= epoch - 30; e--) { const r = wxIndex.get(wxId(loc.id, e)); if (r) { prev = r; start = e + 1; break; } }
-  let rec;
-  for (let e = start; e <= epoch; e++) {
-    rec = { ...W.rollDay(loc, e, prev), id: wxId(loc.id, e), campaignId: state.campaignId, locationId: loc.id, updatedAt: 1 };
-    state.weather.push(rec); wxIndex.set(rec.id, rec); queueWx(rec);
+  if (wxUsable(hit)) return hit;
+  const blockStart = epoch - (((epoch % BLOCK) + BLOCK) % BLOCK);
+  let prev = null, rec;
+  for (let e = blockStart; e <= epoch; e++) {
+    const have = wxIndex.get(wxId(loc.id, e));
+    if (wxUsable(have)) { prev = have; rec = have; continue; }
+    rec = { ...W.rollDay(loc, e, prev), id: wxId(loc.id, e), campaignId: state.campaignId, locationId: loc.id, v: WX_V, updatedAt: 1 };
+    const i = state.weather.findIndex(x => x.id === rec.id); if (i >= 0) state.weather[i] = rec; else state.weather.push(rec);
+    wxIndex.set(rec.id, rec); queueWx(rec);
     prev = rec;
   }
   return rec;
+}
+// After a day's weather is changed by hand, later rolled days in that block are worked out again from it.
+function dropLaterWeather(locId, epoch, campaignId = state.campaignId) {
+  const end = epoch - (((epoch % BLOCK) + BLOCK) % BLOCK) + BLOCK;
+  for (const w of state.weather) {
+    if (w.campaignId === campaignId && w.locationId === locId && w.epoch > epoch && w.epoch < end && !w.manual && !w.rerolls) { w.v = 0; wxIndex.set(w.id, w); }
+  }
 }
 const todayWx = () => weatherFor(hereLoc(), Math.floor(now() / C.DAY));
 
@@ -303,7 +316,12 @@ async function load() {
   for (const l of fix) l.override.twilight = true;
   if (fix.length) await db.putMany('locations', fix);
   state.campaignId = (await db.getMeta('campaignId')) || state.campaigns[0].id;
-  if (!campaign()) state.campaignId = state.campaigns.find(c => !c.deleted).id;
+  if (!campaign() || campaign().deleted) {
+    // The campaign this device was on was combined into another (or deleted): move to one that's still here.
+    state.campaignId = (state.campaigns.find(c => !c.deleted && c.name === campaign()?.name) || state.campaigns.find(c => !c.deleted)).id;
+    await db.setMeta('campaignId', state.campaignId);
+    state.sessionId = null;
+  }
   const c = campaign();
   if (c.locationId === undefined) { c.locationId = /frostmaiden/i.test(c.name) ? 'loc-ten-towns' : null; await save('campaigns', c); }
 }
@@ -1086,6 +1104,7 @@ $('#wxDlg').addEventListener('close', async () => {
     offset: Math.round(((low - n.low) + (high - n.high)) / 2), heavyDays: precip === 2 ? 1 : 0, heavyMax: precip === 2 ? 2 : 0 };
   const mid = (low + high) / 2;
   rec.precipType = precip ? (high <= 32 ? 'snow' : mid <= 34 ? 'sleet' : 'rain') : null;
+  dropLaterWeather(loc.id, ep);
   await save('weather', rec); wxIndex.set(rec.id, rec);
   toast("Today's weather set. Tomorrow may carry it on."); render();
 });
@@ -1540,7 +1559,8 @@ $('#view').addEventListener('click', async e => {
       const loc = hereLoc(), ep = Math.floor(now() / C.DAY), cur = weatherFor(loc, ep);
       const prev = wxIndex.get(wxId(loc.id, ep - 1)) || null;
       const n = (cur.rerolls || 0) + 1;
-      const rec = { ...W.rollDay(loc, ep, prev, 'r' + n), id: cur.id, campaignId: cur.campaignId, locationId: loc.id, rerolls: n };
+      const rec = { ...W.rollDay(loc, ep, prev, 'r' + n), id: cur.id, campaignId: cur.campaignId, locationId: loc.id, rerolls: n, v: 2 };
+      dropLaterWeather(loc.id, ep);
       await save('weather', rec); wxIndex.set(rec.id, rec);
       toast(`New weather: ${W.describe(rec)}, ${W.fmtF(rec.low)} to ${W.fmtF(rec.high)}.`); break;
     }
@@ -1691,6 +1711,7 @@ $('#wxBtn').addEventListener('click', () => { if (!hereLoc()) { openLocPicker();
 $('#clockBtn').addEventListener('click', () => {
   $('#timeNow').innerHTML = timeNowHTML();
   $('#timePicker').innerHTML = pickerHTML('tp', now());
+  { const d = C.fromMinutes(now()); $('#clockInput').value = `${String(d.hour).padStart(2, '0')}:${String(d.minute).padStart(2, '0')}`; }
   $('#timeDlg').showModal();
 });
 $('#timeDlg').addEventListener('click', async e => {
@@ -1700,14 +1721,31 @@ $('#timeDlg').addEventListener('click', async e => {
   else await setTime(now() + +v, { longRest: v === '480' });
   $('#timePicker').innerHTML = pickerHTML('tp', now());
 });
+// Set the time of day: moves forward to the next time it's that o'clock (later today, or tomorrow).
+async function setClockTo(mins) {
+  const d = C.fromMinutes(now());
+  let t = d.epoch * C.DAY + mins;
+  if (t <= now()) t += C.DAY;
+  const span = t - now();
+  await setTime(t);
+  $('#timePicker').innerHTML = pickerHTML('tp', now());
+  $('#clockInput').value = `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}`;
+  toast(`Moved forward ${C.fmtSpan(span)} to ${C.fmtTime(now())}.`);
+}
+$('#clockSetBtn').addEventListener('click', () => { const [h, m] = ($('#clockInput').value || '').split(':').map(Number); if (!isNaN(h)) setClockTo(h * 60 + (m || 0)); });
+document.querySelector('.clock-quick').addEventListener('click', e => { const b = e.target.closest('[data-tod]'); if (b) setClockTo(+b.dataset.tod); });
 $('#timeSetBtn').addEventListener('click', async () => { await setTime(readPicker('tp')); toast('In-game date set.'); });
 
 // Settings
 function openSettings() {
   const sel = $('#campaignSel');
-  sel.innerHTML = state.campaigns.filter(c => !c.deleted).map(c => `<option value="${c.id}" ${c.id === state.campaignId ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
+  const live = state.campaigns.filter(c => !c.deleted);
+  const dupName = c => live.filter(x => x.name === c.name).length > 1;
+  sel.innerHTML = live.map(c => { const n = state.sessions.filter(x => x.campaignId === c.id && !x.deleted).length;
+    return `<option value="${c.id}" ${c.id === state.campaignId ? 'selected' : ''}>${esc(c.name)}${dupName(c) ? ` (${n} session${n === 1 ? '' : 's'}, last changed ${esc(lastEdited(c))})` : ''}</option>`; }).join('');
   $('#campaignName').value = campaign().name;
   $('#survivalToggle').checked = survivalOn();
+  renderCombine();
   $('#obToggle').checked = randomOutbreaksOn(); $('#obFreq').value = campaign().outbreakFreq || 'normal';
   applyTheme(themePref);
   let last = null; try { last = localStorage.getItem('sn-lastBackup'); } catch (_) {}
@@ -1729,6 +1767,85 @@ $('#campaignName').addEventListener('change', async e => {
 $('#obToggle').addEventListener('change', async e => { const c = campaign(); c.randomOutbreaks = e.target.checked; c.obWeek = O.weekOf(now()) - 1; await save('campaigns', c); await rollOutbreaks(); render(); });
 $('#obFreq').addEventListener('change', async e => { const c = campaign(); c.outbreakFreq = e.target.value; await save('campaigns', c); });
 $('#survivalToggle').addEventListener('change', async e => { const c = campaign(); c.survivalOn = e.target.checked; await save('campaigns', c); render(); });
+// Two copies of the same campaign (each device started its own before syncing): fold one into the other.
+function lastEdited(c) {
+  let t = c.updatedAt || 0;
+  for (const st of STORES) if (state[st]?.length) for (const r of state[st]) if (r.campaignId === c.id && (r.updatedAt || 0) > t) t = r.updatedAt;
+  return t ? new Date(t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : 'never';
+}
+function campaignSummary(c) {
+  const n = st => state[st].filter(x => x.campaignId === c.id && !x.deleted).length;
+  const withNotes = state.sessions.filter(x => x.campaignId === c.id && !x.deleted && (x.notes || '').trim()).length;
+  return `${n('sessions')} session${n('sessions') === 1 ? '' : 's'} (${withNotes} with notes), ${n('pcs')} characters, ${n('training')} training, in-game date ${C.fmtShort(c.current)}, last changed ${lastEdited(c)}`;
+}
+function renderCombine() {
+  const others = state.campaigns.filter(c => !c.deleted && c.id !== state.campaignId);
+  const box = $('#combineBox');
+  if (!others.length) { box.innerHTML = ''; return; }
+  box.innerHTML = `<p class="small"><b>This campaign:</b> ${esc(campaign().name)} · ${esc(campaignSummary(campaign()))}</p>
+    ${others.map(c => `<div class="combine-row"><span class="small"><b>${esc(c.name)}</b> · ${esc(campaignSummary(c))}</span>
+      <button type="button" class="btn small" data-combine="${c.id}">Combine into this one</button></div>`).join('')}
+    <p class="muted small">Combining moves the other copy's sessions, notes, training, diseases, Calder requests and cards into this campaign. Characters with the same name become one character. This campaign's in-game date and location are kept. The other copy is then removed, and sync carries the change to your other device.</p>`;
+}
+$('#combineBox').addEventListener('click', async e => {
+  const b = e.target.closest('[data-combine]'); if (!b) return;
+  const keep = campaign(), other = state.campaigns.find(c => c.id === b.dataset.combine);
+  $('#settingsDlg').close();
+  if (!(await confirmBox(`Combine "${other.name}" into this campaign?`, `Its sessions, notes, training, diseases and the rest move here, and characters with the same name are joined up. This campaign keeps its date (${C.fmtShort(keep.current)}).`, 'Combine'))) { openSettings(); return; }
+  await combineCampaigns(keep, other);
+  toast(`Combined. "${other.name}" is folded into this campaign.`);
+  openSettings(); render();
+});
+async function combineCampaigns(keep, other) {
+  flushSaves();
+  // Characters: match by name, fill in anything the kept one is missing, and join their histories.
+  const map = {};
+  const keepPcs = state.pcs.filter(p => p.campaignId === keep.id && !p.deleted);
+  for (const op of state.pcs.filter(p => p.campaignId === other.id && !p.deleted)) {
+    const kp = keepPcs.find(p => fold(p.name) === fold(op.name));
+    if (kp) {
+      map[op.id] = kp.id;
+      for (const k of ['ancestry', 'classes', 'player', 'maxHp', 'ac', 'pp', 'immunity']) if ((kp[k] == null || kp[k] === '') && op[k] != null && op[k] !== '') kp[k] = op[k];
+      const ids = new Set(kp.deaths.map(d => d.id)); kp.deaths = [...kp.deaths, ...op.deaths.filter(d => !ids.has(d.id))];
+      if (!kp.favor?.spent && op.favor?.spent) kp.favor = op.favor;
+      kp.learned = [...(kp.learned || []), ...(op.learned || [])];
+      await save('pcs', kp);
+      op.deleted = true; await save('pcs', op);
+    } else { op.campaignId = keep.id; await save('pcs', op); map[op.id] = op.id; }
+  }
+  const re = id => map[id] || id;
+  const keepNums = new Set(state.sessions.filter(x => x.campaignId === keep.id && !x.deleted).map(x => x.number));
+  for (const s of state.sessions.filter(x => x.campaignId === other.id && !x.deleted)) {
+    const empty = !s.notes && !s.shopping && !(s.inkIds || []).length;
+    if (empty && keepNums.has(s.number)) { s.deleted = true; await save('sessions', s); continue; } // an empty duplicate
+    s.campaignId = keep.id; s.party = (s.party || []).map(p => ({ ...p, pcId: re(p.pcId) })); s.absent = (s.absent || []).map(re);
+    await save('sessions', s);
+  }
+  for (const st of ['cases', 'training', 'trades', 'cards']) {
+    for (const r of state[st].filter(x => x.campaignId === other.id && !x.deleted)) { r.campaignId = keep.id; if (r.pcId) r.pcId = re(r.pcId); await save(st, r); }
+  }
+  for (const o of state.outbreaks.filter(x => x.campaignId === other.id && !x.deleted)) {
+    if (o.random) { o.deleted = true; } else o.campaignId = keep.id; // rolled outbreaks belong to the old copy's dice
+    await save('outbreaks', o);
+  }
+  other.deleted = true; await save('campaigns', other);
+}
+
+$('#deleteCampaignBtn').addEventListener('click', async () => {
+  const c = campaign();
+  $('#settingsDlg').close();
+  if (!(await confirmBox(`Delete "${c.name}"?`, `This removes the whole campaign: ${campaignSummary(c)}. It's removed from your other device too when it syncs. A backup file is the only way to get it back.`, 'Delete campaign'))) { openSettings(); return; }
+  flushSaves();
+  for (const st of ['pcs', 'sessions', 'cases', 'training', 'trades', 'cards', 'outbreaks']) {
+    for (const r of state[st].filter(x => x.campaignId === c.id && !x.deleted)) { r.deleted = true; await save(st, r); }
+  }
+  c.deleted = true; await save('campaigns', c);
+  let next = state.campaigns.find(x => !x.deleted);
+  if (!next) { next = { id: uid(), name: 'New campaign', current: c.current, createdAt: Date.now(), locationId: null }; await save('campaigns', next); }
+  state.campaignId = next.id; await db.setMeta('campaignId', next.id);
+  state.sessionId = null; state.calMonth = null; state.calDay = null;
+  toast(`"${c.name}" deleted.`); render(); openSettings();
+});
 $('#newCampaignBtn').addEventListener('click', async () => {
   const c = { id: uid(), name: 'New campaign', current: now(), createdAt: Date.now() };
   await save('campaigns', c); state.campaignId = c.id; await db.setMeta('campaignId', c.id);
@@ -1774,6 +1891,7 @@ async function mergeBackupData(data) {
   if (changed) {
     await load();
     indexWeather();
+    for (const w of data.weather || []) if (w.manual || w.rerolls) dropLaterWeather(w.locationId, w.epoch, w.campaignId);
     if (!state.sessions.some(x => x.id === state.sessionId && !x.deleted && x.campaignId === state.campaignId)) state.sessionId = latestSession()?.id || null;
     refreshAfterSync();
   }

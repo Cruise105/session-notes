@@ -12,6 +12,14 @@ Your printed session sheet as an app for the Galaxy Tab S9+. It runs in Chrome, 
 - **Shopping notes** for anything else from the session's shopping.
 - **Google Drive sync** between your PC and tablet, the same way the Bestiary does it, plus backup files.
 
+## Setting the clock
+
+Tap the date at the top. Type a **time of day** and tap **Set time**, or tap one of the quick times (Dawn, Morning, Noon, Afternoon, Dusk, Night, Midnight). The clock moves forward to the next time it's that o'clock, so survival, diseases and training all keep up. The +10 min, +1 hour, long rest, +1 day and +1 week buttons are still there, and so is setting an exact date.
+
+## Two copies of a campaign
+
+If a device started its own campaign before it first synced, Settings will list two campaigns with the same name, each showing its session count and when it was last changed. Either **combine** the other copy into the one you're on (sessions, notes, training and the rest move over, and characters with the same name are joined), or switch to the copy you don't want and tap **Delete this campaign**. The change syncs to your other device.
+
 ## Random outbreaks (homebrew)
 
 Every in-game week, the app rolls for outbreaks around the world: more often in crowded cities, rarely in the wilds, never for mythic diseases. Season and climate decide which diseases (bad-water sicknesses in warm, wet places and summer; influenza and coughs in the cold). Each has a severity (a few cases, spreading, epidemic) and dies out after a few weeks. Your tablet and PC roll the same outbreaks.
