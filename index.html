@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Session Notes</title>
+<meta name="description" content="Session notes, party roster and in-game calendar for the DM's table.">
+<meta name="theme-color" content="#f3eee4" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#171411" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <span class="brand-name">Session Notes</span>
+    <button class="campaign-name" id="campaignBtn" title="Campaigns and settings"></button>
+  </div>
+  <button class="clock" id="clockBtn" aria-label="In-game date and time. Tap to change.">
+    <span class="clock-moons" id="clockMoons"></span>
+    <span class="clock-text"><span class="clock-date" id="clockDate"></span><span class="clock-time" id="clockTime"></span></span>
+  </button>
+  <div class="top-actions">
+    <button class="icon-btn" id="settingsBtn" aria-label="Settings">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 01-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 010-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 014 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 010 4h-.1a1.7 1.7 0 00-1.5 1z"/></svg>
+    </button>
+  </div>
+</header>
+
+<nav class="tabs" role="tablist" aria-label="Sections">
+  <button role="tab" data-view="session">Session</button>
+  <button role="tab" data-view="party">Party</button>
+  <button role="tab" data-view="calendar">Calendar</button>
+  <button role="tab" data-view="history">History</button>
+</nav>
+
+<main id="view" tabindex="-1"></main>
+
+<div id="inkView" class="ink-view" hidden></div>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<dialog id="timeDlg" class="dlg-wrap">
+  <form class="dlg" method="dialog">
+    <h2>In-game time</h2>
+    <div class="time-now" id="timeNow"></div>
+    <div class="time-grid">
+      <button type="button" class="btn" data-adv="10">+10 min</button>
+      <button type="button" class="btn" data-adv="60">+1 hour</button>
+      <button type="button" class="btn" data-adv="480">+8 hours<small>long rest</small></button>
+      <button type="button" class="btn" data-adv="dawn">Next dawn<small>6:00 AM</small></button>
+      <button type="button" class="btn" data-adv="1440">+1 day</button>
+      <button type="button" class="btn" data-adv="10080">+1 week</button>
+    </div>
+    <div class="time-back">
+      <span class="muted">Fix a mistake:</span>
+      <button type="button" class="btn small" data-adv="-60">−1 hour</button>
+      <button type="button" class="btn small" data-adv="-1440">−1 day</button>
+    </div>
+    <details class="set-exact">
+      <summary>Set an exact date and time</summary>
+      <div id="timePicker"></div>
+      <div class="row"><button type="button" class="btn" id="timeSetBtn">Set</button></div>
+    </details>
+    <div class="row"><button class="btn primary" value="close">Done</button></div>
+  </form>
+</dialog>
+
+<dialog id="deathDlg" class="dlg-wrap">
+  <form class="dlg" method="dialog" id="deathForm">
+    <h2 id="deathTitle">Log a death</h2>
+    <label class="field"><span>How did it happen?</span>
+      <textarea name="note" rows="2" placeholder="Frozen solid by Auril's breath"></textarea></label>
+    <div class="field"><span>When</span><div id="deathPicker"></div></div>
+    <label class="check" id="deathFavorRow"><input type="checkbox" name="favor"> <span>Use their <b>Favor of Fate</b> coin to bring them back</span></label>
+    <div class="row">
+      <button class="btn" value="cancel" formnovalidate>Cancel</button>
+      <button class="btn primary" value="save">Log death</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="pcDlg" class="dlg-wrap">
+  <form class="dlg" method="dialog" id="pcForm">
+    <h2 id="pcTitle">Character</h2>
+    <label class="field"><span>Name</span><input name="name" required autocomplete="off"></label>
+    <div class="field-row">
+      <label class="field"><span>Ancestry</span><input name="ancestry" autocomplete="off" placeholder="Gold Dragonborn"></label>
+      <label class="field"><span>Class &amp; level</span><input name="classes" autocomplete="off" placeholder="Monk 7 (Way of the Long Death)"></label>
+    </div>
+    <label class="field"><span>Player</span><input name="player" autocomplete="off"></label>
+    <div class="field-row three">
+      <label class="field"><span>Max HP</span><input name="maxHp" type="number" inputmode="numeric" min="0"></label>
+      <label class="field"><span>AC</span><input name="ac" type="number" inputmode="numeric" min="0"></label>
+      <label class="field"><span>Passive Perception</span><input name="pp" type="number" inputmode="numeric" min="0"></label>
+    </div>
+    <div class="row">
+      <button class="btn" value="cancel" formnovalidate>Cancel</button>
+      <button class="btn primary" value="save">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="settingsDlg" class="dlg-wrap">
+  <form class="dlg" method="dialog">
+    <h2>Settings</h2>
+    <section class="set">
+      <h3>Campaign</h3>
+      <div class="field-row">
+        <label class="field"><span>Current campaign</span><select id="campaignSel"></select></label>
+        <label class="field"><span>Name</span><input id="campaignName" autocomplete="off"></label>
+      </div>
+      <div class="row left"><button type="button" class="btn" id="newCampaignBtn">New campaign</button></div>
+      <p class="muted small">Each campaign keeps its own party, sessions and in-game date.</p>
+    </section>
+    <section class="set">
+      <h3>Backup</h3>
+      <p class="muted small">Everything is stored on this device only. Save a backup file now and then, and use it to move your notes between your PC and tablet. Loading a backup merges it in: anything newer wins, nothing is deleted.</p>
+      <div class="row left">
+        <button type="button" class="btn" id="saveBackupBtn">Save backup file</button>
+        <button type="button" class="btn" id="loadBackupBtn">Load backup file</button>
+        <input type="file" id="backupFile" accept=".json,application/json" hidden>
+      </div>
+      <p class="muted small" id="lastBackup"></p>
+    </section>
+    <section class="set">
+      <h3>Appearance</h3>
+      <div class="seg" id="themeSeg" role="radiogroup" aria-label="Theme">
+        <button type="button" data-theme="system" role="radio">Match device</button>
+        <button type="button" data-theme="light" role="radio">Light</button>
+        <button type="button" data-theme="dark" role="radio">Dark</button>
+      </div>
+    </section>
+    <section class="set">
+      <h3>About</h3>
+      <p class="muted small" id="storageInfo">Checking storage…</p>
+      <p class="muted small">Calendar: Concordant Reckoning. Fonts: Alegreya and Alegreya Sans, SIL Open Font License.</p>
+    </section>
+    <div class="row"><button class="btn primary" value="close">Done</button></div>
+  </form>
+</dialog>
+
+<dialog id="confirmDlg" class="dlg-wrap">
+  <form class="dlg narrow" method="dialog">
+    <h2 id="confirmTitle"></h2>
+    <p id="confirmBody"></p>
+    <div class="row">
+      <button class="btn" value="no">Cancel</button>
+      <button class="btn primary" value="yes" id="confirmYes"></button>
+    </div>
+  </form>
+</dialog>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
