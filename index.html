@@ -194,6 +194,11 @@
     <label class="check"><input type="checkbox" name="partyMember"> <span>The trainer is a party member (no fee)</span></label>
     <p class="muted small" id="trainRule"></p>
     <label class="field"><span>Cost per day (gp)</span><input name="cost" type="number" inputmode="decimal" min="0" step="0.1"></label>
+    <div class="field"><span>Started on (in game)</span><div id="trainStart"></div></div>
+    <div class="field-row">
+      <label class="field"><span>Or: time left (days)</span><input name="left" type="number" inputmode="numeric" min="0" placeholder="e.g. 7 for one week"></label>
+      <p class="muted small" style="align-self:end">Already training before the app? Set the day they started, or just how much is left, and the start date is worked out for you.</p>
+    </div>
     <div class="preview" id="trainPreview"></div>
     <div class="row"><button class="btn" value="cancel" formnovalidate>Cancel</button><button class="btn primary" value="save">Start training</button></div>
   </form>

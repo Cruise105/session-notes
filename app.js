@@ -6,7 +6,7 @@ import * as W from './weather.js';
 import * as H from './health.js';
 import * as T from './downtime.js';
 
-const APP_VERSION = '1.4.2';
+const APP_VERSION = '1.4.3';
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const todayISO = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
@@ -1161,7 +1161,7 @@ function openTraining() {
   $('#trainPc').innerHTML = activePcs().map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
   $('#trainKind').innerHTML = Object.entries(T.KINDS).map(([k, v]) => `<option value="${k}">${esc(v.label)}</option>`).join('');
   $('#trainTrainer').innerHTML = Object.entries(T.TRAINERS).map(([k, v]) => `<option value="${k}" ${k === 'none' ? 'selected' : ''}>${esc(v.label)}</option>`).join('');
-  f.mod.value = 0; trainKindChanged(); $('#trainDlg').returnValue = ''; $('#trainDlg').showModal();
+  f.mod.value = 0; $('#trainStart').innerHTML = pickerHTML('ts', now()); trainKindChanged(); $('#trainDlg').returnValue = ''; $('#trainDlg').showModal();
 }
 function trainKindChanged() {
   const f = $('#trainForm'), k = f.kind.value;
@@ -1196,21 +1196,33 @@ function trainCostDefault() {
   f.cost.value = c == null ? '' : c;
   trainPreview();
 }
+function trainStartAt() { const t = readPicker('ts'); return Math.min(t, now()); }
 function trainPreview() {
   const f = $('#trainForm');
   const days = T.trainingDays(+f.mod.value, f.trainer.value), weeks = Math.max(1, 10 - (+f.mod.value || 0));
+  const start = trainStartAt(), finish = start + days * C.DAY, left = finish - now();
   const cost = f.cost.value === '' ? null : +f.cost.value;
   $('#trainPreview').innerHTML = `<b>${weeks} weeks</b> base (10 − modifier)${f.trainer.value !== 'skilled' ? `, ${f.trainer.value === 'none' ? '+50%' : f.trainer.value === 'apprentice' ? '+25%' : '−25%'} for the trainer` : ''} = <b>${C.fmtSpan(days * C.DAY)}</b> (${days} days).
-    Finishes <b>${esc(C.fmtShort(now() + days * C.DAY))}</b>. ${cost == null ? 'No cost set.' : cost ? `Cost: ${T.fmtGp(cost)} a day, <b>${T.fmtGp(cost * days)}</b> in all.` : 'No fee.'}`;
+    ${start < now() ? `Started ${esc(C.fmtShort(start))}. ` : ''}Finishes <b>${esc(C.fmtShort(finish))}</b>${start < now() ? (left > 0 ? ` (<b>${C.fmtSpan(left)} left</b>)` : ' (<b>already finished</b>: it will be marked done)') : ''}. ${cost == null ? 'No cost set.' : cost ? `Cost: ${T.fmtGp(cost)} a day, <b>${T.fmtGp(cost * days)}</b> in all.` : 'No fee.'}`;
 }
 $('#trainForm').addEventListener('change', e => {
   const n = e.target.name;
   if (n === 'kind') trainKindChanged();
   else if (n === 'what') trainWhatChanged();
-  else if (n === 'sub' || n === 'trainer' || n === 'partyMember') trainCostDefault();
+  else if (n === 'sub' || n === 'trainer' || n === 'partyMember') { applyLeft(); trainCostDefault(); }
   else trainPreview();
 });
-$('#trainForm').addEventListener('input', e => { if (e.target.name === 'mod' || e.target.name === 'cost') trainPreview(); });
+// Work the start date out from the time left.
+function applyLeft() {
+  const f = $('#trainForm'); if (f.left.value === '') return;
+  const days = T.trainingDays(+f.mod.value, f.trainer.value), left = Math.max(0, Math.min(days, +f.left.value || 0));
+  const d = C.fromMinutes(now()), start = (d.epoch - (days - left)) * C.DAY + d.hour * 60 + d.minute;
+  $('#trainStart').innerHTML = pickerHTML('ts', start);
+}
+$('#trainForm').addEventListener('input', e => {
+  if (e.target.closest('#trainStart')) $('#trainForm').left.value = ''; else applyLeft();
+  trainPreview();
+});
 $('#trainDlg').addEventListener('close', async () => {
   if ($('#trainDlg').returnValue !== 'save') return;
   const f = $('#trainForm');
@@ -1218,9 +1230,11 @@ $('#trainDlg').addEventListener('close', async () => {
   const t = { id: uid(), campaignId: state.campaignId, pcId: f.pc.value, kind: f.kind.value, what: f.kind.value === 'language' && f.sub.value ? `${what}` : what,
     sub: $('#trainSubWrap').hidden ? null : f.sub.value, ability: f.ability.value, mod: +f.mod.value || 0, trainer: f.trainer.value, trainerName: f.trainerName.value.trim(),
     partyMember: f.partyMember.checked, costPerDay: f.cost.value === '' ? 0 : +f.cost.value, days: T.trainingDays(+f.mod.value, f.trainer.value),
-    startAt: now(), pausedAt: null, pausedTotal: 0, state: 'active', createdAt: Date.now() };
+    startAt: trainStartAt(), pausedAt: null, pausedTotal: 0, state: 'active', createdAt: Date.now() };
   await save('training', t);
-  toast(`${pcName(t.pcId)} starts training: ${t.what}. Finishes ${C.fmtShort(now() + t.days * C.DAY)}.`); render();
+  const fin = t.startAt + t.days * C.DAY;
+  toast(fin > now() ? `${pcName(t.pcId)}: ${t.what}. ${C.fmtSpan(fin - now())} left, finishing ${C.fmtShort(fin)}.` : `${pcName(t.pcId)} has already finished ${t.what}.`);
+  await processDowntime(); render();
 });
 
 // ---------- Calder dialog
