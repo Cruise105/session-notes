@@ -6,7 +6,7 @@ import * as W from './weather.js';
 import * as H from './health.js';
 import * as T from './downtime.js';
 
-const APP_VERSION = '1.4.0';
+const APP_VERSION = '1.4.1';
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const todayISO = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
@@ -640,7 +640,7 @@ function viewSession() {
           <td class="dis-cell">${open && pc ? diseaseSummary(pc.id) : esc(v.diseases || '—')}</td>
           <td><span class="deaths">${open && pc ? pc.deaths.length : (v.deaths ?? 0)}</span>${open && pc ? `<button class="mini-btn" data-act="death" title="Log a death" aria-label="Log a death for ${esc(pc.name)}">+</button>` : ''}</td>
           <td>${open && pc ? favorBadge(pc) : (v.favorSpent ? '<span class="badge spent">Spent</span>' : '<span class="badge avail">Available</span>')}</td>
-        </tr>`).join('') || `<tr><td colspan="6" class="muted">No active characters. Add them on the Party tab.</td></tr>`}</tbody>
+        </tr>`).join('') || `<tr><td colspan="7" class="muted">${open ? 'No active characters. Add them on the Party tab.' : "The party's stats weren't recorded for this session."}</td></tr>`}</tbody>
       </table></div>
       ${open ? '' : '<p class="muted small">Stats as they were when this session ended.</p>'}
     </section>
@@ -810,7 +810,7 @@ function viewHistory() {
       <span class="hist-sub">${esc(C.fmtShort(s.startAt))}${s.endAt != null ? ` → ${esc(C.fmtShort(s.endAt))}` : ' · in progress'}${inkFor(s).length ? ` · ${inkFor(s).length} ink page${inkFor(s).length > 1 ? 's' : ''}` : ''}</span>
       <span class="hist-snip">${esc((s.notes || '').slice(0, 180)) || '<i class="muted">No notes</i>'}</span></button>`).join('') || '<p class="muted">No sessions yet.</p>';
   }
-  return `<div class="view-head"><h1>History</h1></div>
+  return `<div class="view-head"><h1>History</h1><button class="btn primary" data-act="past-new">Add a past session</button></div>
     <label class="search"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
       <input id="searchInput" type="search" placeholder="Search notes, shopping and deaths" value="${esc(state.query)}" autocomplete="off" aria-label="Search"></label>
     <div class="hist-list">${body}</div>`;
@@ -1121,6 +1121,31 @@ $('#disDlg').addEventListener('close', async () => {
   await save('diseases', d); render();
 });
 
+// ---------- adding a past session (notes from before the app)
+function openPast() {
+  const f = $('#pastForm'); f.reset();
+  const nums = campaignSessions().map(x => x.number);
+  f.number.value = nums.length ? Math.max(1, Math.min(...nums) - 1) : 1;
+  f.realDate.value = '';
+  const start = now() - 7 * C.DAY;
+  $('#pastStart').innerHTML = pickerHTML('ps', start);
+  $('#pastEnd').innerHTML = pickerHTML('pe', start + 8 * 60);
+  $('#pastLoc').innerHTML = `<option value="">Not recorded</option>${liveLocations().sort((a, b) => a.name.localeCompare(b.name)).map(l => `<option value="${l.id}" ${l.id === campaign().locationId ? 'selected' : ''}>${esc(l.name)}</option>`).join('')}`;
+  $('#pastDlg').returnValue = ''; $('#pastDlg').showModal();
+}
+$('#pastDlg').addEventListener('close', async () => {
+  if ($('#pastDlg').returnValue !== 'save' && $('#pastDlg').returnValue !== 'another') return;
+  const f = $('#pastForm'), number = Math.max(1, +f.number.value || 1);
+  if (campaignSessions().some(x => x.number === number) && !(await confirmBox(`Session ${number} already exists`, 'Add another session with the same number anyway?', 'Add it'))) return;
+  const startAt = readPicker('ps'); let endAt = readPicker('pe'); if (endAt < startAt) endAt = startAt;
+  const rec = { id: uid(), campaignId: state.campaignId, number, realDate: f.realDate.value, startAt, endAt, locationId: f.loc.value || null, visited: [],
+    party: [], notes: f.notes.value, shopping: f.shopping.value, inkIds: [], past: true, createdAt: Date.now() };
+  await save('sessions', rec);
+  toast(`Session ${number} added to your history.`);
+  render();
+  if ($('#pastDlg').returnValue === 'another') { openPast(); $('#pastForm').number.value = Math.max(1, number - 1); }
+});
+
 // ---------- training dialog
 function openTraining() {
   const f = $('#trainForm'); f.reset();
@@ -1416,6 +1441,7 @@ $('#view').addEventListener('click', async e => {
     case 'outbreak-end': { const o = state.outbreaks.find(x => x.id === b.closest('[data-ob]').dataset.ob); o.endedAt = now(); await save('outbreaks', o); break; }
     case 'outbreak-del': { const o = state.outbreaks.find(x => x.id === b.closest('[data-ob]').dataset.ob); o.deleted = true; await save('outbreaks', o); break; }
     case 'disease-new': openDisease(null); return;
+    case 'past-new': openPast(); return;
     // ----- training
     case 'train-new': openTraining(); return;
     case 'train-pause': {

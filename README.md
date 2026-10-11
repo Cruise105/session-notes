@@ -12,6 +12,10 @@ Your printed session sheet as an app for the Galaxy Tab S9+. It runs in Chrome, 
 - **Shopping notes** for anything else from the session's shopping.
 - **Google Drive sync** between your PC and tablet, the same way the Bestiary does it, plus backup files.
 
+## Adding past sessions
+
+History tab → **Add a past session**. Enter the session number, the real date, the in-game start and end, where the party was, and the notes (write them or paste them in). **Save and add another** keeps going backward one number at a time. Past sessions only add to your history: they never move the campaign's date or change the party. Open one afterward to add ink pages.
+
 ## New in stage 4
 
 - **Downtime training** using your Ability & Proficiency Improvement rules: 10 − modifier weeks, adjusted for the trainer (none +50%, Apprentice +25%, Expert −25%), with the cost per day from your price table (Apprentice −10%, Expert +10%; a party member trains for free). It counts calendar days, shows a progress bar and finish date, can be paused, and finishes itself on the right day. Finished training is listed on each PC's Party card. Your table has no price for saving throws, so set that one yourself.

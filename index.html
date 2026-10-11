@@ -149,6 +149,28 @@
   </form>
 </dialog>
 
+<dialog id="pastDlg" class="dlg-wrap">
+  <form class="dlg" method="dialog" id="pastForm">
+    <h2>Add a past session</h2>
+    <p class="muted small">For sessions from before the app. This only adds to your history: it doesn't move the campaign's date, the party, or anything else.</p>
+    <div class="field-row">
+      <label class="field"><span>Session number</span><input name="number" type="number" inputmode="numeric" min="1" required></label>
+      <label class="field"><span>Played on (real date)</span><input name="realDate" type="date"></label>
+    </div>
+    <div class="field"><span>In-game start</span><div id="pastStart"></div></div>
+    <div class="field"><span>In-game end</span><div id="pastEnd"></div></div>
+    <label class="field"><span>Where the party was</span><select name="loc" id="pastLoc"></select></label>
+    <label class="field"><span>Notes</span><textarea name="notes" rows="8" placeholder="Write with the S Pen, or paste notes you typed somewhere else"></textarea></label>
+    <label class="field"><span>Shopping notes</span><textarea name="shopping" rows="2"></textarea></label>
+    <p class="muted small">Ink pages can be added afterward, from the session itself.</p>
+    <div class="row">
+      <button class="btn" value="cancel" formnovalidate>Cancel</button>
+      <button class="btn" value="another">Save and add another</button>
+      <button class="btn primary" value="save">Save</button>
+    </div>
+  </form>
+</dialog>
+
 <dialog id="trainDlg" class="dlg-wrap">
   <form class="dlg" method="dialog" id="trainForm">
     <h2>Start training</h2>
