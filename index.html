@@ -18,6 +18,7 @@
     <span class="brand-name">Session Notes</span>
     <button class="campaign-name" id="campaignBtn" title="Campaigns and settings"></button>
   </div>
+  <button class="wx-chip" id="wxBtn" data-goto="world"></button>
   <button class="clock" id="clockBtn" aria-label="In-game date and time. Tap to change.">
     <span class="clock-moons" id="clockMoons"></span>
     <span class="clock-text"><span class="clock-date" id="clockDate"></span><span class="clock-time" id="clockTime"></span></span>
@@ -36,6 +37,7 @@
 <nav class="tabs" role="tablist" aria-label="Sections">
   <button role="tab" data-view="session">Session</button>
   <button role="tab" data-view="party">Party</button>
+  <button role="tab" data-view="world">World</button>
   <button role="tab" data-view="calendar">Calendar</button>
   <button role="tab" data-view="history">History</button>
 </nav>
@@ -44,6 +46,79 @@
 
 <div id="inkView" class="ink-view" hidden></div>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
+<div id="updateBar" class="update-bar" hidden><span>A new version of Session Notes is ready.</span><button class="btn primary small" type="button">Restart now</button></div>
+
+<dialog id="locPickDlg" class="dlg-wrap">
+  <form class="dlg" method="dialog">
+    <h2>Where is the party?</h2>
+    <label class="search"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+      <input id="locSearch" type="search" placeholder="Search locations" autocomplete="off" aria-label="Search locations"></label>
+    <div id="locPickList" class="pick-list"></div>
+    <div class="row"><button class="btn" value="cancel">Cancel</button></div>
+  </form>
+</dialog>
+
+<dialog id="locDlg" class="dlg-wrap">
+  <form class="dlg" method="dialog" id="locForm">
+    <h2 id="locTitle">Location</h2>
+    <div class="field-row">
+      <label class="field"><span>Name</span><input name="name" required autocomplete="off"></label>
+      <label class="field"><span>Region</span><input name="region" list="regionList" autocomplete="off" placeholder="Faerûn: the North"></label>
+    </div>
+    <datalist id="regionList"></datalist>
+    <label class="field"><span>Climate type</span><select name="climate" id="locClimate"></select></label>
+    <div class="field-row three">
+      <label class="field"><span>Hemisphere</span><select name="hemisphere"><option value="north">North</option><option value="south">South (seasons flip)</option></select></label>
+      <label class="field"><span>Temperature adjust (°F)</span><input name="tempAdjust" type="number" inputmode="numeric" step="1"></label>
+      <label class="field"><span>Wind</span><select name="wind"><option value="-1">Sheltered (forest)</option><option value="0">Normal</option><option value="1">Windy (open ground)</option></select></label>
+    </div>
+    <label class="check"><input type="checkbox" name="fog"> <span>Often foggy</span></label>
+    <label class="check"><input type="checkbox" name="overcast"> <span>Always overcast: the sun never shows clearly</span></label>
+    <label class="field"><span>Notes</span><textarea name="notes" rows="2"></textarea></label>
+    <label class="check"><input type="checkbox" name="hasOverride"> <span><b>Magical weather override</b>, like the Everlasting Rime</span></label>
+    <div id="ovFields" class="ov-fields">
+      <div class="field-row">
+        <label class="field"><span>Name</span><input name="ovName" autocomplete="off" placeholder="The Everlasting Rime"></label>
+        <label class="field"><span>Use this climate's numbers</span><select name="ovClimate" id="ovClimate"></select></label>
+      </div>
+      <label class="check"><input type="checkbox" name="ovActive"> <span>Active right now (untick when the magic breaks)</span></label>
+      <label class="check"><input type="checkbox" name="ovLock"> <span>Winter all year: no thaw, no summer</span></label>
+      <label class="check"><input type="checkbox" name="ovTwilight"> <span>Perpetual twilight: dim light all day, no sunrise or sunset</span></label>
+      <div class="field-row">
+        <label class="field"><span>Chance of rain or snow per day (%)</span><input name="ovWet" type="number" inputmode="numeric" min="0" max="100" placeholder="Climate's normal"></label>
+        <label class="field"><span>Daylight hours</span><input name="ovDaylight" type="number" inputmode="decimal" min="0" max="24" step="0.5" placeholder="Location's normal"></label>
+      </div>
+    </div>
+    <div class="row">
+      <button class="btn danger-text" type="button" id="locDelete">Delete location</button>
+      <span class="spacer"></span>
+      <button class="btn" value="cancel" formnovalidate>Cancel</button>
+      <button class="btn primary" value="save">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="wxDlg" class="dlg-wrap">
+  <form class="dlg" method="dialog" id="wxForm">
+    <h2>Set today's weather</h2>
+    <p class="muted small">For when the story calls for it. Tomorrow's roll can carry it on, the same as rolled weather.</p>
+    <div class="field-row">
+      <label class="field"><span>Night low (°F)</span><input name="low" type="number" inputmode="numeric" required></label>
+      <label class="field"><span>Day high (°F)</span><input name="high" type="number" inputmode="numeric" required></label>
+    </div>
+    <div class="field-row three">
+      <label class="field"><span>Rain or snow</span><select name="precip"><option value="0">None</option><option value="1">Light</option><option value="2">Heavy</option></select></label>
+      <label class="field"><span>Wind</span><select name="wind"><option value="0">Calm</option><option value="1">Light</option><option value="2">Strong</option></select></label>
+      <label class="field"><span>Sky (when dry)</span><select name="sky"><option value="clear">Clear</option><option value="partly">Partly cloudy</option><option value="overcast">Overcast</option></select></label>
+    </div>
+    <label class="check"><input type="checkbox" name="fog"> <span>Morning fog</span></label>
+    <p class="muted small">Snow or rain is picked from the temperature: snow at 32°F and below.</p>
+    <div class="row">
+      <button class="btn" value="cancel" formnovalidate>Cancel</button>
+      <button class="btn primary" value="save">Set weather</button>
+    </div>
+  </form>
+</dialog>
 
 <dialog id="timeDlg" class="dlg-wrap">
   <form class="dlg" method="dialog">

@@ -1,4 +1,4 @@
-# Session Notes (stage 1, with sync)
+# Session Notes (stage 2: world and weather)
 
 Your printed session sheet as an app for the Galaxy Tab S9+. It runs in Chrome, installs to your home screen, and works offline once installed.
 
@@ -12,7 +12,22 @@ Your printed session sheet as an app for the Galaxy Tab S9+. It runs in Chrome, 
 - **Shopping** as a plain notes box for now. The Calder Ashveil tracker comes in stage 4.
 - **Google Drive sync** between your PC and tablet, the same way the Bestiary does it, plus backup files.
 
-## One-time setup with GitHub Pages (about 10 minutes)
+## New in stage 2
+
+- **World tab** with today's weather where the party is, the last 10 days of weather, and all the locations from the Omnithel Climate Guide.
+- **Weather that makes sense.** Each day is rolled on the DMG weather table, using that location's climate. There's a 50% chance yesterday's weather holds, so storms and cold snaps last a few days, and heavy rain or snow ends after 1–3 days. Every device rolls the same weather for the same day, so sync never changes it under you.
+- **The Everlasting Rime** is switched on for Ten-Towns, the Icewind Dale wilderness, Reghed Glacier and the Sea of Moving Ice: winter all year, in perpetual twilight. Untick it on each location when the Rime breaks.
+- **Daylight** changes with the season, with sunrise and sunset shown for wherever the party is.
+- **DMG weather effects** (extreme cold and heat, strong wind, heavy rain or snow) show up on the day they apply, with a short reminder of the rule.
+- **Reroll today** or **Set today's weather** whenever the story needs it.
+- **Calendar** shows the weather on each day that's already happened.
+- **Updates install themselves.** When a new version arrives, the app restarts into it. If you're writing at the time, it waits and asks first.
+
+## Updating from stage 1
+
+Upload all the files to your `session-notes` repository and replace the old ones. Then close the app completely and open it again while online. It may take one more restart. After this version, updates will restart the app on their own.
+
+ (about 10 minutes)
 
 Use the same GitHub account as the Bestiary. Putting both apps on the same site is what lets them share the party later.
 

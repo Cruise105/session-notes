@@ -2,8 +2,9 @@ import { db, uid, STORES } from './db.js';
 import * as C from './calendar.js';
 import { openInkEditor, renderThumb } from './ink.js';
 import { initSync } from './sync.js';
+import * as W from './weather.js';
 
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.2.1';
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const todayISO = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
@@ -11,7 +12,7 @@ const fmtReal = iso => { if (!iso) return ''; const [y, m, d] = iso.split('-').m
 const fold = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 
 const state = {
-  campaigns: [], pcs: [], sessions: [], ink: [],
+  campaigns: [], pcs: [], sessions: [], ink: [], locations: [], weather: [],
   campaignId: null, view: 'session', sessionId: null, calMonth: null, calDay: null, query: '',
 };
 
@@ -23,6 +24,34 @@ const activePcs = () => livePcs().filter(p => p.active !== false);
 const campaignSessions = () => state.sessions.filter(s => s.campaignId === state.campaignId && !s.deleted).sort((a, b) => b.number - a.number || b.createdAt - a.createdAt);
 const latestSession = () => campaignSessions()[0];
 const inkFor = s => (s.inkIds || []).map(id => state.ink.find(i => i.id === id)).filter(i => i && !i.deleted);
+const liveLocations = () => state.locations.filter(l => !l.deleted);
+const locById = id => state.locations.find(l => l.id === id && !l.deleted);
+const hereLoc = () => locById(campaign().locationId);
+
+// ---------- weather records (one per campaign, location and day)
+const wxId = (locId, epoch) => `${state.campaignId}:${locId}:${epoch}`;
+const wxIndex = new Map();
+function indexWeather() { wxIndex.clear(); for (const w of state.weather) wxIndex.set(w.id, w); }
+let wxToSave = [];
+let wxSaveT;
+function queueWx(rec) { wxToSave.push(rec); clearTimeout(wxSaveT); wxSaveT = setTimeout(() => { const l = wxToSave; wxToSave = []; db.putMany('weather', l); }, 300); }
+
+// Returns the weather for a location and day, rolling it (and any days in between, so streaks carry) if needed.
+function weatherFor(loc, epoch) {
+  if (!loc) return null;
+  const hit = wxIndex.get(wxId(loc.id, epoch));
+  if (hit) return hit;
+  let start = epoch, prev = null;
+  for (let e = epoch - 1; e >= epoch - 30; e--) { const r = wxIndex.get(wxId(loc.id, e)); if (r) { prev = r; start = e + 1; break; } }
+  let rec;
+  for (let e = start; e <= epoch; e++) {
+    rec = { ...W.rollDay(loc, e, prev), id: wxId(loc.id, e), campaignId: state.campaignId, locationId: loc.id, updatedAt: 1 };
+    state.weather.push(rec); wxIndex.set(rec.id, rec); queueWx(rec);
+    prev = rec;
+  }
+  return rec;
+}
+const todayWx = () => weatherFor(hereLoc(), Math.floor(now() / C.DAY));
 
 async function save(store, rec) {
   rec.updatedAt = Date.now();
@@ -51,7 +80,7 @@ function flushSaves() {
 async function seed() {
   const cid = uid();
   // `seed: true` marks the untouched starter campaign, so loading a backup on a new device replaces it instead of duplicating the party.
-  const c = { id: cid, name: 'Rime of the Frostmaiden', current: C.toMinutes({ year: 301, month: 6, day: 3, hour: 8 }), createdAt: Date.now(), seed: true };
+  const c = { id: cid, name: 'Rime of the Frostmaiden', current: C.toMinutes({ year: 301, month: 6, day: 3, hour: 8 }), createdAt: Date.now(), seed: true, locationId: 'loc-ten-towns' };
   await save('campaigns', c);
   const party = [
     ['Araxstoxinos', 'Triton', 'Paladin 7 (Oath of the Open Sea)'],
@@ -73,11 +102,21 @@ function newPc(fields) {
 }
 
 async function load() {
-  const [campaigns, pcs, sessions, ink] = await Promise.all(STORES.map(s => db.all(s)));
-  Object.assign(state, { campaigns, pcs, sessions, ink });
+  const [campaigns, pcs, sessions, ink, locations, weather] = await Promise.all(STORES.map(s => db.all(s)));
+  Object.assign(state, { campaigns, pcs, sessions, ink, locations, weather });
   if (!campaigns.filter(c => !c.deleted).length) { await seed(); }
+  // Locations from the climate guide. Fixed ids and updatedAt 0, so every device adds the same list and any edit wins.
+  const have = new Set(state.locations.map(l => l.id));
+  const add = W.SEED_LOCATIONS.filter(l => !have.has(l.id)).map(l => ({ ...l, override: l.override ? { ...l.override } : null, updatedAt: 0 }));
+  if (add.length) { await db.putMany('locations', add); state.locations.push(...add); }
+  // Stage 2.1: the Rime brings perpetual twilight (Rime of the Frostmaiden). Fill it in on locations made before that.
+  const fix = state.locations.filter(l => l.override?.name === 'The Everlasting Rime' && l.override.twilight === undefined);
+  for (const l of fix) l.override.twilight = true;
+  if (fix.length) await db.putMany('locations', fix);
   state.campaignId = (await db.getMeta('campaignId')) || state.campaigns[0].id;
   if (!campaign()) state.campaignId = state.campaigns.find(c => !c.deleted).id;
+  const c = campaign();
+  if (c.locationId === undefined) { c.locationId = /frostmaiden/i.test(c.name) ? 'loc-ten-towns' : null; await save('campaigns', c); }
 }
 
 // ---------- theme
@@ -110,6 +149,11 @@ function renderHeader() {
   $('#clockDate').textContent = C.fmtDate(t);
   $('#clockTime').textContent = `${C.fmtTime(t)} · ${C.seasonOf(d.month, d.day)}`;
   $('#clockMoons').innerHTML = C.CAL.moons.map(m => moonSVG(m, d.epoch, 20)).join('');
+  const loc = hereLoc(), w = todayWx();
+  $('#wxBtn').innerHTML = loc && w
+    ? `${W.iconSVG(W.weatherIcon(w), 24)}<span class="wx-chip-text"><b>${W.fmtF(w.low)} / ${W.fmtF(w.high)}</b><span>${esc(loc.name)}</span></span>`
+    : `${W.iconSVG('cloud', 24)}<span class="wx-chip-text"><b>Weather</b><span>Pick a location</span></span>`;
+  $('#wxBtn').setAttribute('aria-label', loc && w ? `${loc.name}: ${W.describe(w)}, ${W.fmtF(w.low)} to ${W.fmtF(w.high)}. Open World.` : 'Pick a location for weather');
   document.querySelectorAll('.tabs [data-view]').forEach(b => b.setAttribute('aria-selected', String(b.dataset.view === state.view)));
 }
 
@@ -140,6 +184,7 @@ function render() {
   if (state.view === 'party') v.innerHTML = viewParty();
   if (state.view === 'calendar') v.innerHTML = viewCalendar();
   if (state.view === 'history') v.innerHTML = viewHistory();
+  if (state.view === 'world') v.innerHTML = viewWorld();
   afterRender();
 }
 
@@ -157,6 +202,64 @@ function favorBadge(p) {
   return p.favor?.spent
     ? `<span class="badge spent" title="Spent ${p.favor.at != null ? esc(C.fmtShort(p.favor.at)) : ''}">Spent</span>`
     : `<span class="badge avail">Available</span>`;
+}
+
+// ---------- weather card (Session and World tabs)
+function wxCard({ big = false } = {}) {
+  const loc = hereLoc();
+  if (!loc) return `<section class="card wx-card empty"><div><h2>Weather</h2><p class="muted">Choose where the party is to get the day's weather.</p></div><button class="btn primary" data-act="pick-loc">Choose a location</button></section>`;
+  const t = now(), ep = Math.floor(t / C.DAY), w = weatherFor(loc, ep), dl = W.daylight(loc, ep), ec = W.effectiveClimate(loc);
+  const mins = t - ep * C.DAY, isDay = mins >= dl.rise && mins < dl.set;
+  const fx = W.effects(w, loc);
+  return `<section class="card wx-card ${big ? 'big' : ''}">
+    <div class="wx-main">
+      <div class="wx-glyph">${W.iconSVG(W.weatherIcon(w), big ? 64 : 48)}</div>
+      <div class="wx-text">
+        <div class="wx-loc"><button class="link-btn wx-locname" data-act="pick-loc" title="Change location">${esc(loc.name)}</button>${ec.overrideName ? `<span class="badge rime">${esc(ec.overrideName)}</span>` : ''}</div>
+        <div class="wx-temps"><b>${W.fmtF(w.low)}</b> at night · <b>${W.fmtF(w.high)}</b> by day <span class="muted">· ${W.feelsLike(w)}</span></div>
+        <div class="wx-desc">${esc(W.describe(w))}${w.manual ? ' <span class="badge">Set by you</span>' : w.held ? ' <span class="muted small">(same as yesterday)</span>' : ''}</div>
+        <div class="wx-sun muted small">${dl.twilight ? `Perpetual twilight: the sun never fully rises` : `Sunrise ${W.fmtClock(dl.rise)} · Sunset ${W.fmtClock(dl.set)} · ${dl.hours.toFixed(1)} hours of daylight · ${isDay ? 'Daytime now' : 'Dark now'}`}</div>
+      </div>
+      <div class="wx-btns">
+        <button class="btn small" data-act="pick-loc">Change location</button>
+        ${big ? `<button class="btn small" data-act="wx-reroll">Reroll today</button><button class="btn small" data-act="wx-set">Set today's weather</button>` : `<button class="btn small" data-act="goto-world">Weather tools</button>`}
+      </div>
+    </div>
+    ${fx.length ? `<div class="wx-fx">${fx.map(f => `<details class="fx fx-${f.id}"><summary>${esc(f.name)}</summary><p>${esc(f.text)} <span class="muted">(${esc(f.src)})</span></p></details>`).join('')}</div>` : ''}
+  </section>`;
+}
+
+function viewWorld() {
+  const loc = hereLoc();
+  const ep = Math.floor(now() / C.DAY);
+  let recent = '';
+  if (loc) {
+    weatherFor(loc, ep);
+    const rows = [];
+    for (let e = ep; e > ep - 10; e--) { const r = wxIndex.get(wxId(loc.id, e)); if (r) rows.push(r); }
+    recent = `<section class="card"><h2>Recent weather in ${esc(loc.name)}</h2>
+      <div class="table-wrap"><table class="wx-table"><thead><tr><th>Day</th><th>Weather</th><th>Night</th><th>Day</th><th></th></tr></thead><tbody>
+      ${rows.map(r => `<tr><td>${esc(C.fmtDate(r.epoch * C.DAY))}</td><td><span class="wx-inline">${W.iconSVG(W.weatherIcon(r), 20)} ${esc(W.describe(r))}</span></td><td>${W.fmtF(r.low)}</td><td>${W.fmtF(r.high)}</td><td class="muted small">${r.manual ? 'Set by you' : r.held ? 'Held over' : 'New roll'}</td></tr>`).join('')}
+      </tbody></table></div>
+      <p class="muted small">Each morning there's a 50% chance yesterday's weather holds, so storms and cold snaps last a few days. Heavy rain or snow ends after 1–3 days.</p></section>`;
+  }
+  const groups = {};
+  for (const l of liveLocations()) (groups[l.region || 'Other'] ||= []).push(l);
+  const order = Object.keys(groups).sort((a, b) => a.localeCompare(b));
+  const lib = order.map(g => `<details class="loc-group" ${groups[g].some(l => l.id === loc?.id) ? 'open' : ''}><summary>${esc(g)} <span class="muted">(${groups[g].length})</span></summary>
+    <ul class="loc-list">${groups[g].sort((a, b) => a.name.localeCompare(b.name)).map(l => `<li data-loc="${l.id}" class="${l.id === loc?.id ? 'here' : ''}">
+      <div class="loc-info"><b>${esc(l.name)}</b><span class="muted small">${esc(W.climateById(l.climate).name)}${l.hemisphere === 'south' ? ' · southern hemisphere' : ''}${+l.tempAdjust ? ` · ${l.tempAdjust > 0 ? '+' : ''}${l.tempAdjust}°F` : ''}${l.wind > 0 ? ' · windy' : l.wind < 0 ? ' · sheltered' : ''}${l.fog ? ' · often foggy' : ''}${l.overcast ? ' · always overcast' : ''}</span>
+        ${l.override ? `<span class="badge ${l.override.active ? 'rime' : ''}">${esc(l.override.name || 'Override')}${l.override.active ? '' : ' (off)'}</span>` : ''}</div>
+      <div class="loc-btns">${l.id === loc?.id ? '<span class="pill live">Party is here</span>' : '<button class="btn small" data-act="go-loc">Go here</button>'}<button class="btn small" data-act="edit-loc">Edit</button></div>
+    </li>`).join('')}</ul></details>`).join('');
+  return `<div class="view-head"><h1>World</h1></div>
+    ${wxCard({ big: true })}
+    ${recent}
+    <section class="card">
+      <div class="card-head"><h2>Locations</h2><span class="muted small">From the Omnithel Climate Guide. Temperatures and rain chances are estimates, not from a sourcebook.</span>
+        <button class="btn small push" data-act="add-loc">Add a location</button></div>
+      ${lib}
+    </section>`;
 }
 
 function viewSession() {
@@ -195,6 +298,8 @@ function viewSession() {
                  : `<em>Ended ${esc(C.fmtDateTime(s.endAt))} (${esc(C.fmtSpan(s.endAt - s.startAt))} later)</em>`}</div>
       </div>
     </div>
+
+    ${open ? wxCard() : (s.locationId && locById(s.locationId) ? `<p class="muted small sess-loc">Started in ${esc(locById(s.locationId).name)}${(s.visited || []).length ? `, then ${(s.visited || []).map(v => esc(locById(v.locationId)?.name || '?')).join(', ')}` : ''}.</p>` : '')}
 
     <section class="card">
       <h2>Party</h2>
@@ -288,6 +393,11 @@ function viewCalendar() {
   const lead = C.weekdayOf(first);
   const sessByEpoch = {};
   for (const s of campaignSessions()) (sessByEpoch[Math.floor(s.startAt / C.DAY)] ||= []).push(s);
+  // Weather already recorded for this campaign: prefer where the party is now, otherwise any place that day.
+  const wxByEpoch = {};
+  const hereId = campaign().locationId;
+  if (hereLoc()) weatherFor(hereLoc(), cur.epoch);
+  for (const w of state.weather) if (w.campaignId === state.campaignId && (!wxByEpoch[w.epoch] || w.locationId === hereId)) wxByEpoch[w.epoch] = w;
   const cells = [];
   for (let i = 0; i < lead; i++) cells.push('<div class="cal-cell empty" aria-hidden="true"></div>');
   for (let d = 1; d <= m.length; d++) {
@@ -304,6 +414,7 @@ function viewCalendar() {
       <span class="cal-num">${d}${isToday ? '<span class="cal-now">Now</span>' : ''}</span><span class="cal-moons">${moons}</span>
       ${evs.map(e => `<span class="cal-ev ${e.kind}">${esc(e.name)}</span>`).join('')}
       ${ss.map(s => `<span class="cal-sess">Session ${s.number}</span>`).join('')}
+      ${wxByEpoch[ep] && ep <= cur.epoch ? `<span class="cal-wx" title="${esc(W.describe(wxByEpoch[ep]))}">${W.iconSVG(W.weatherIcon(wxByEpoch[ep]), 16)}${W.fmtF(wxByEpoch[ep].high)}</span>` : ''}
     </button>`);
   }
   let detail = '';
@@ -316,6 +427,7 @@ function viewCalendar() {
       <h2>${esc(C.fmtDate(t))}</h2>
       <p class="muted">${C.seasonOf(month, d)}</p>
       <ul class="moon-list">${C.CAL.moons.map(mo => { const ph = C.moonPhase(mo, ep); return `<li>${moonSVG(mo, ep, 22)} <b>${esc(mo.name)}</b> ${ph.name} <span class="muted">(day ${ph.day} of ${mo.cycle})</span></li>`; }).join('')}</ul>
+      ${wxByEpoch[ep] && ep <= cur.epoch ? `<p class="wx-inline">${W.iconSVG(W.weatherIcon(wxByEpoch[ep]), 22)} ${esc(locById(wxByEpoch[ep].locationId)?.name || '')}: ${esc(W.describe(wxByEpoch[ep]))}, ${W.fmtF(wxByEpoch[ep].low)} to ${W.fmtF(wxByEpoch[ep].high)}</p>` : ''}
       ${evs.map(e => `<div class="ev-detail"><b>${esc(e.label)}</b>${e.description ? `<p class="small">${esc(e.description)}</p>` : ''}</div>`).join('')}
       ${ss.map(s => `<button class="link-btn" data-act="goto-session" data-id="${s.id}">Session ${s.number} started this day</button>`).join(' ')}
       ${ep !== cur.epoch ? `<div class="row left"><button class="btn" data-act="cal-set" data-epoch="${ep}">Make this the current in-game day</button></div>` : '<p class="small"><b>This is the current in-game day.</b></p>'}
@@ -375,7 +487,7 @@ function viewHistory() {
 
 // ---------- actions
 async function startSession(number) {
-  const s = { id: uid(), campaignId: state.campaignId, number, realDate: todayISO(), startAt: now(), endAt: null,
+  const s = { id: uid(), campaignId: state.campaignId, number, realDate: todayISO(), startAt: now(), endAt: null, locationId: campaign().locationId || null, visited: [],
     party: snapshotParty(), notes: '', shopping: '', inkIds: [], createdAt: Date.now() };
   await save('sessions', s);
   state.sessionId = s.id;
@@ -446,14 +558,115 @@ function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.ad
 async function setTime(t) {
   const c = campaign(); c.current = Math.max(0, t); await save('campaigns', c);
   renderHeader(); $('#timeNow').innerHTML = timeNowHTML();
-  if (state.view === 'session' || state.view === 'calendar') render();
+  if ($('#inkView').hidden) render();
 }
 function timeNowHTML() {
   const t = now(), d = C.fromMinutes(t);
   return `<div class="tn-date">${esc(C.fmtDate(t))}</div><div class="tn-time">${esc(C.fmtTime(t))} · ${C.seasonOf(d.month, d.day)}</div>
     <div class="tn-moons">${C.CAL.moons.map(m => `<span>${moonSVG(m, d.epoch, 22)} ${esc(m.name)}: ${C.moonPhase(m, d.epoch).name}</span>`).join('')}</div>
-    ${C.eventsOn(d.month, d.day).map(e => `<div class="tn-ev">${esc(e.label)}</div>`).join('')}`;
+    ${C.eventsOn(d.month, d.day).map(e => `<div class="tn-ev">${esc(e.label)}</div>`).join('')}
+    ${hereLoc() ? (() => { const dl = W.daylight(hereLoc(), d.epoch); return `<div class="tn-sun">In ${esc(hereLoc().name)}: ${dl.twilight ? 'perpetual twilight' : `sunrise ${W.fmtClock(dl.rise)}, sunset ${W.fmtClock(dl.set)}`}</div>`; })() : ''}`;
 }
+
+// ---------- locations
+async function moveTo(locId) {
+  const c = campaign();
+  if (c.locationId === locId) return;
+  c.locationId = locId; await save('campaigns', c);
+  const s = latestSession();
+  if (s && s.endAt == null) { s.visited = [...(s.visited || []), { locationId: locId, at: now() }]; await save('sessions', s); }
+  const loc = locById(locId), w = weatherFor(loc, Math.floor(now() / C.DAY));
+  toast(`The party is in ${loc.name}. ${W.describe(w)}, ${W.fmtF(w.low)} to ${W.fmtF(w.high)}.`);
+}
+
+function openLocPicker() {
+  const dlg = $('#locPickDlg');
+  const draw = q => {
+    const f = fold(q.trim());
+    const list = liveLocations().filter(l => !f || fold(l.name + ' ' + l.region + ' ' + (l.notes || '')).includes(f));
+    const groups = {};
+    for (const l of list) (groups[l.region || 'Other'] ||= []).push(l);
+    $('#locPickList').innerHTML = Object.keys(groups).sort().map(g => `<div class="pick-group"><h3>${esc(g)}</h3>${groups[g].sort((a, b) => a.name.localeCompare(b.name)).map(l =>
+      `<button type="button" class="pick-item ${l.id === campaign().locationId ? 'here' : ''}" data-pick="${l.id}"><b>${esc(l.name)}</b><span class="muted small">${esc(W.climateById(l.climate).name)}${l.override?.active ? ` · ${esc(l.override.name)}` : ''}</span></button>`).join('')}</div>`).join('') || '<p class="muted">No locations match. You can add one on the World tab.</p>';
+  };
+  $('#locSearch').value = '';
+  $('#locSearch').oninput = e => draw(e.target.value);
+  draw('');
+  dlg.returnValue = '';
+  dlg.showModal();
+}
+$('#locPickList').addEventListener('click', async e => {
+  const b = e.target.closest('[data-pick]'); if (!b) return;
+  $('#locPickDlg').close();
+  await moveTo(b.dataset.pick); render();
+});
+
+let editLoc = null;
+function openLocEditor(loc) {
+  editLoc = loc;
+  const f = $('#locForm');
+  f.reset();
+  $('#locTitle').textContent = loc ? `Edit ${loc.name}` : 'Add a location';
+  $('#locClimate').innerHTML = W.CLIMATES.map(c => `<option value="${c.id}">${esc(c.name)}: ${esc(c.feel)}</option>`).join('');
+  $('#ovClimate').innerHTML = W.CLIMATES.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
+  $('#regionList').innerHTML = [...new Set(liveLocations().map(l => l.region))].sort().map(r => `<option value="${esc(r)}">`).join('');
+  const L = loc || { name: '', region: '', climate: 'tempinland', hemisphere: 'north', tempAdjust: 0, wind: 0, fog: false, overcast: false, notes: '', override: null };
+  f.name.value = L.name; f.region.value = L.region; f.climate.value = L.climate; f.hemisphere.value = L.hemisphere || 'north';
+  f.tempAdjust.value = L.tempAdjust || 0; f.wind.value = String(L.wind || 0); f.fog.checked = !!L.fog; f.overcast.checked = !!L.overcast; f.notes.value = L.notes || '';
+  const o = L.override;
+  f.hasOverride.checked = !!o;
+  f.ovName.value = o?.name || ''; f.ovActive.checked = o ? !!o.active : true; f.ovClimate.value = o?.climate || L.climate;
+  f.ovLock.checked = o ? !!o.lockWinter : true; f.ovWet.value = o?.wet ?? ''; f.ovDaylight.value = o?.daylight ?? ''; f.ovTwilight.checked = !!o?.twilight;
+  $('#ovFields').hidden = !o;
+  $('#locDelete').hidden = !loc;
+  $('#locDlg').returnValue = '';
+  $('#locDlg').showModal();
+}
+$('#locForm').hasOverride.addEventListener('change', e => { $('#ovFields').hidden = !e.target.checked; });
+$('#locDelete').addEventListener('click', async () => {
+  if (!editLoc) return;
+  if (editLoc.id === campaign().locationId) { toast("The party is here. Move them somewhere else before deleting it."); return; }
+  $('#locDlg').close();
+  if (!(await confirmBox(`Delete ${editLoc.name}?`, 'It disappears from your location list. Weather already recorded there stays in your history.', 'Delete'))) return;
+  editLoc.deleted = true; await save('locations', editLoc); render();
+});
+$('#locDlg').addEventListener('close', async () => {
+  if ($('#locDlg').returnValue !== 'save') return;
+  const f = $('#locForm');
+  const loc = editLoc || { id: 'loc-' + uid(), createdAt: Date.now() };
+  loc.name = f.name.value.trim() || loc.name || 'Unnamed place';
+  loc.region = f.region.value.trim() || 'My locations';
+  loc.climate = f.climate.value; loc.hemisphere = f.hemisphere.value;
+  loc.tempAdjust = +f.tempAdjust.value || 0; loc.wind = +f.wind.value || 0;
+  loc.fog = f.fog.checked; loc.overcast = f.overcast.checked; loc.notes = f.notes.value.trim();
+  loc.override = f.hasOverride.checked ? {
+    name: f.ovName.value.trim() || 'Magical weather', active: f.ovActive.checked, climate: f.ovClimate.value, lockWinter: f.ovLock.checked,
+    wet: f.ovWet.value === '' ? null : Math.max(0, Math.min(100, +f.ovWet.value)), daylight: f.ovDaylight.value === '' ? null : Math.max(0, Math.min(24, +f.ovDaylight.value)), twilight: f.ovTwilight.checked,
+  } : null;
+  await save('locations', loc);
+  toast(`${loc.name} saved. New settings apply from the next day that gets rolled.`);
+  render();
+});
+
+function openWxSet() {
+  const loc = hereLoc(), ep = Math.floor(now() / C.DAY), w = weatherFor(loc, ep), f = $('#wxForm');
+  f.low.value = w.low; f.high.value = w.high; f.precip.value = String(w.precip); f.wind.value = String(w.wind);
+  f.sky.value = w.sky || 'overcast'; f.fog.checked = !!w.fog;
+  $('#wxDlg').returnValue = '';
+  $('#wxDlg').showModal();
+}
+$('#wxDlg').addEventListener('close', async () => {
+  if ($('#wxDlg').returnValue !== 'save') return;
+  const f = $('#wxForm'), loc = hereLoc(), ep = Math.floor(now() / C.DAY), cur = weatherFor(loc, ep);
+  const low = +f.low.value, high = Math.max(+f.high.value, low), precip = +f.precip.value;
+  const n = W.normals(loc, ep);
+  const rec = { ...cur, low, high, precip, wind: +f.wind.value, sky: precip ? 'overcast' : f.sky.value, fog: !precip && f.fog.checked, manual: true, held: false,
+    offset: Math.round(((low - n.low) + (high - n.high)) / 2), heavyDays: precip === 2 ? 1 : 0, heavyMax: precip === 2 ? 2 : 0 };
+  const mid = (low + high) / 2;
+  rec.precipType = precip ? (high <= 32 ? 'snow' : mid <= 34 ? 'sleet' : 'rain') : null;
+  await save('weather', rec); wxIndex.set(rec.id, rec);
+  toast("Today's weather set. Tomorrow may carry it on."); render();
+});
 
 // ---------- ink
 async function openInk(page) {
@@ -531,6 +744,20 @@ $('#view').addEventListener('click', async e => {
       await setTime(t); break;
     }
     case 'goto-session': state.view = 'session'; state.sessionId = b.dataset.id; window.scrollTo(0, 0); break;
+    case 'goto-world': state.view = 'world'; window.scrollTo(0, 0); break;
+    case 'pick-loc': openLocPicker(); return;
+    case 'go-loc': await moveTo(b.closest('[data-loc]').dataset.loc); break;
+    case 'edit-loc': openLocEditor(locById(b.closest('[data-loc]').dataset.loc)); return;
+    case 'add-loc': openLocEditor(null); return;
+    case 'wx-reroll': {
+      const loc = hereLoc(), ep = Math.floor(now() / C.DAY), cur = weatherFor(loc, ep);
+      const prev = wxIndex.get(wxId(loc.id, ep - 1)) || null;
+      const n = (cur.rerolls || 0) + 1;
+      const rec = { ...W.rollDay(loc, ep, prev, 'r' + n), id: cur.id, campaignId: cur.campaignId, locationId: loc.id, rerolls: n };
+      await save('weather', rec); wxIndex.set(rec.id, rec);
+      toast(`New weather: ${W.describe(rec)}, ${W.fmtF(rec.low)} to ${W.fmtF(rec.high)}.`); break;
+    }
+    case 'wx-set': openWxSet(); return;
     default: return;
   }
   render();
@@ -565,6 +792,7 @@ $('#view').addEventListener('change', async e => {
 });
 
 // Header
+$('#wxBtn').addEventListener('click', () => { if (!hereLoc()) { openLocPicker(); return; } state.view = 'world'; render(); window.scrollTo(0, 0); });
 $('#clockBtn').addEventListener('click', () => {
   $('#timeNow').innerHTML = timeNowHTML();
   $('#timePicker').innerHTML = pickerHTML('tp', now());
@@ -645,6 +873,7 @@ async function mergeBackupData(data) {
   const changed = switched || added > 0 || updated > 0;
   if (changed) {
     await load();
+    indexWeather();
     if (!state.sessions.some(x => x.id === state.sessionId && !x.deleted && x.campaignId === state.campaignId)) state.sessionId = latestSession()?.id || null;
     refreshAfterSync();
   }
@@ -695,11 +924,32 @@ $('#backupFile').addEventListener('change', async e => {
 document.addEventListener('visibilitychange', () => { if (document.hidden) flushSaves(); });
 window.addEventListener('pagehide', flushSaves);
 
+// ---------- app updates: restart into the new version, but never in the middle of writing
+function updateReady() {
+  flushSaves();
+  const a = document.activeElement;
+  const busy = !$('#inkView').hidden || (a && a.matches && a.matches('input, textarea, select')) || document.querySelector('dialog[open]');
+  if (!busy) { toast('Updating to the new version…'); setTimeout(() => location.reload(), 900); return; }
+  const bar = $('#updateBar');
+  bar.hidden = false;
+  bar.querySelector('button').onclick = () => { flushSaves(); setTimeout(() => location.reload(), 300); };
+}
+
 // ---------- boot
 (async function boot() {
   await load();
+  indexWeather();
   state.sessionId = latestSession()?.id || null;
   render();
   initSync({ toast, build: buildBackupData, merge: mergeBackupData });
-  if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
+  if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+    let hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.register('sw.js').then(reg => {
+      document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update().catch(() => {}); });
+    }).catch(() => {});
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController) { hadController = true; return; } // first install, nothing to refresh
+      updateReady();
+    });
+  }
 })();
