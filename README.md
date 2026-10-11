@@ -1,4 +1,4 @@
-# Session Notes (stage 1)
+# Session Notes (stage 1, with sync)
 
 Your printed session sheet as an app for the Galaxy Tab S9+. It runs in Chrome, installs to your home screen, and works offline once installed.
 
@@ -10,7 +10,7 @@ Your printed session sheet as an app for the Galaxy Tab S9+. It runs in Chrome, 
 - **Notes** you write with the S Pen. S Pen to Text turns your handwriting into text, so the History tab can search it.
 - **Ink pages** for sketches: the pen draws, your finger scrolls, and holding the S Pen's side button erases.
 - **Shopping** as a plain notes box for now. The Calder Ashveil tracker comes in stage 4.
-- **Backup and restore**, the same way the Bestiary does it.
+- **Google Drive sync** between your PC and tablet, the same way the Bestiary does it, plus backup files.
 
 ## One-time setup with GitHub Pages (about 10 minutes)
 
@@ -34,11 +34,23 @@ Use the same GitHub account as the Bestiary. Putting both apps on the same site 
 - **Fill in the party's stats.** The five current PCs are already in, but Max HP, AC and Passive Perception are blank. You can fill them in on the Party tab, or right in the session table.
 - **Check the moons against Fantasy Calendar.** Open the Calendar tab and compare Selune and Ruidus with what Fantasy Calendar shows for the same day. Tell me if they're off and I'll line them up before you cancel your subscription.
 
-## Moving notes between PC and tablet
+## Google Drive sync
 
-Open Settings (the gear icon) and use **Save backup file** on one device. Put the file in Google Drive, then use **Load backup file** on the other device. Loading a backup merges it in: anything newer wins, and nothing is deleted. On a brand-new device, loading a backup replaces the starter party, so you won't get two copies.
+Sync uses the same Google sign-in key as the Bestiary, so there's nothing new to set up on Google's side.
 
-Save a backup now and then even if you only use the tablet. Everything lives on the device, so the backup file is your safety net.
+1. **On the PC first:** open Settings (the gear icon), go to **Google Drive sync**, and click **Connect Google Drive**. Pick your account. If Google warns that it "hasn't verified this app," that's the same testing-mode warning you saw with the Bestiary: click **Continue** and allow access.
+2. A green **Synced** cloud button appears in the top bar.
+3. **Then on the tablet:** open the app while online and do the same Connect step. The tablet swaps its starter party for the one from your PC, so you won't get two copies.
+
+After that it runs itself: it syncs when the app opens, when you switch away from it, and a few seconds after changes. Tap the cloud button to sync right away. When Google's sign-in runs out, the button says **Sign in**, and one tap fixes it.
+
+Connect both devices before you start writing sessions on the second one. If both devices already have sessions of their own, sync keeps both copies of the campaign instead of guessing which one is right.
+
+The Bestiary and Session Notes each keep their own sync file in Drive, so they never overwrite each other.
+
+## Backup file
+
+Settings also has **Save backup file** and **Load backup file**. Sync doesn't replace them: a backup file is your safety net if something ever goes wrong. Loading one merges it in, so anything newer wins and nothing is deleted.
 
 ## Updating later
 

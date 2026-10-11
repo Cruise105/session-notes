@@ -23,6 +23,10 @@
     <span class="clock-text"><span class="clock-date" id="clockDate"></span><span class="clock-time" id="clockTime"></span></span>
   </button>
   <div class="top-actions">
+    <button class="sync-btn" id="syncBtn" type="button" hidden data-state="off">
+      <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M17.5 19a4.5 4.5 0 0 0 .5-8.97A6 6 0 0 0 6.34 9.1 4 4 0 0 0 6.5 19z"/></svg>
+      <span class="syncword">Synced</span>
+    </button>
     <button class="icon-btn" id="settingsBtn" aria-label="Settings">
       <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 01-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 010-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 014 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 010 4h-.1a1.7 1.7 0 00-1.5 1z"/></svg>
     </button>
@@ -115,8 +119,12 @@
       <p class="muted small">Each campaign keeps its own party, sessions and in-game date.</p>
     </section>
     <section class="set">
-      <h3>Backup</h3>
-      <p class="muted small">Everything is stored on this device only. Save a backup file now and then, and use it to move your notes between your PC and tablet. Loading a backup merges it in: anything newer wins, nothing is deleted.</p>
+      <h3>Google Drive sync</h3>
+      <div id="syncInfo"></div>
+    </section>
+    <section class="set">
+      <h3>Backup file</h3>
+      <p class="muted small">A backup file is your safety net, separate from sync. Save one now and then. Loading a backup merges it in: anything newer wins, nothing is deleted.</p>
       <div class="row left">
         <button type="button" class="btn" id="saveBackupBtn">Save backup file</button>
         <button type="button" class="btn" id="loadBackupBtn">Load backup file</button>

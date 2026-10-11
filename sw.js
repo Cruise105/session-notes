@@ -1,7 +1,7 @@
 // Offline support. Bump VERSION whenever any app file changes.
-const VERSION = 'session-notes-v1';
+const VERSION = 'session-notes-v2';
 const FILES = [
-  './', 'index.html', 'styles.css', 'app.js', 'db.js', 'calendar.js', 'ink.js', 'manifest.webmanifest',
+  './', 'index.html', 'styles.css', 'app.js', 'db.js', 'calendar.js', 'ink.js', 'sync.js', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png',
   'fonts/alegreya-latin-400-normal.woff2', 'fonts/alegreya-latin-400-italic.woff2', 'fonts/alegreya-latin-700-normal.woff2',
   'fonts/alegreya-sans-latin-400-normal.woff2', 'fonts/alegreya-sans-latin-400-italic.woff2',

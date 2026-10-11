@@ -1,8 +1,9 @@
 import { db, uid, STORES } from './db.js';
 import * as C from './calendar.js';
 import { openInkEditor, renderThumb } from './ink.js';
+import { initSync } from './sync.js';
 
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.1.0';
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const todayISO = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
@@ -612,9 +613,62 @@ $('#themeSeg').addEventListener('click', e => {
   applyTheme(themePref); render();
 });
 
-$('#saveBackupBtn').addEventListener('click', async () => {
-  const data = { app: 'session-notes', version: 1, exported: new Date().toISOString(), campaignId: state.campaignId };
+// Everything worth carrying between devices (the backup file and the Drive sync file are the same thing).
+async function buildBackupData() {
+  const data = { app: 'session-notes', version: 1, exported: new Date().toISOString() };
   for (const s of STORES) data[s] = await db.all(s);
+  return data;
+}
+
+// Merge another device's data in; the newest edit of each record wins. Returns a short summary.
+async function mergeBackupData(data) {
+  if (data?.app !== 'session-notes') throw new Error('not ours');
+  flushSaves();
+  // A brand-new device still has the untouched starter campaign: drop it so the party isn't duplicated.
+  const starter = state.campaigns.find(c => c.seed && !state.sessions.some(x => x.campaignId === c.id));
+  let switched = false;
+  if (starter && (data.campaigns || []).length && !data.campaigns.some(c => c.id === starter.id)) {
+    for (const pc of state.pcs.filter(x => x.campaignId === starter.id)) await db.del('pcs', pc.id);
+    await db.del('campaigns', starter.id);
+    const keep = data.campaigns.find(c => !c.deleted && !c.seed) || data.campaigns[0];
+    await db.setMeta('campaignId', keep.id);
+    switched = true;
+  }
+  let added = 0, updated = 0;
+  for (const s of STORES) {
+    for (const rec of data[s] || []) {
+      if (!rec?.id) continue;
+      const cur = await db.get(s, rec.id);
+      if (!cur) { await db.put(s, rec); added++; } else if ((rec.updatedAt || 0) > (cur.updatedAt || 0)) { await db.put(s, rec); updated++; }
+    }
+  }
+  const changed = switched || added > 0 || updated > 0;
+  if (changed) {
+    await load();
+    if (!state.sessions.some(x => x.id === state.sessionId && !x.deleted && x.campaignId === state.campaignId)) state.sessionId = latestSession()?.id || null;
+    refreshAfterSync();
+  }
+  const parts = [];
+  if (added) parts.push(`${added} new`);
+  if (updated) parts.push(`${updated} updated`);
+  return { changed, parts: parts.length ? parts : ['party set up from your other device'] };
+}
+
+// Don't yank the page out from under the pen: if you're writing, refresh once you stop.
+let refreshPending = false;
+function refreshAfterSync() {
+  const a = document.activeElement;
+  const busy = !$('#inkView').hidden || (a && $('#view').contains(a) && a.matches('input, textarea, select'));
+  if (busy) { refreshPending = true; renderHeader(); return; }
+  refreshPending = false; render();
+}
+document.addEventListener('focusout', () => setTimeout(() => {
+  const a = document.activeElement;
+  if (refreshPending && !(a && $('#view').contains(a) && a.matches('input, textarea, select')) && $('#inkView').hidden) { refreshPending = false; render(); }
+}, 50));
+
+$('#saveBackupBtn').addEventListener('click', async () => {
+  const data = await buildBackupData();
   const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
@@ -628,26 +682,13 @@ $('#loadBackupBtn').addEventListener('click', () => $('#backupFile').click());
 $('#backupFile').addEventListener('change', async e => {
   const file = e.target.files[0]; e.target.value = '';
   if (!file) return;
+  let data;
+  try { data = JSON.parse(await file.text()); } catch (_) { return toast("That file isn't a Session Notes backup."); }
   try {
-    const data = JSON.parse(await file.text());
-    if (data.app !== 'session-notes') throw new Error('not ours');
-    // A brand-new device still has the untouched starter campaign: drop it so the party isn't duplicated.
-    const starter = state.campaigns.find(c => c.seed && !state.sessions.some(x => x.campaignId === c.id));
-    if (starter && (data.campaigns || []).length && !(data.campaigns || []).some(c => c.id === starter.id)) {
-      for (const pc of state.pcs.filter(x => x.campaignId === starter.id)) await db.del('pcs', pc.id);
-      await db.del('campaigns', starter.id);
-      await db.setMeta('campaignId', data.campaignId || data.campaigns[0].id);
-    }
-    let added = 0, updated = 0;
-    for (const s of STORES) {
-      for (const rec of data[s] || []) {
-        const cur = await db.get(s, rec.id);
-        if (!cur) { await db.put(s, rec); added++; } else if ((rec.updatedAt || 0) > (cur.updatedAt || 0)) { await db.put(s, rec); updated++; }
-      }
-    }
-    await load(); render();
-    toast(`Backup loaded: ${added} added, ${updated} updated.`);
-  } catch (err) { toast("That file isn't a Session Notes backup."); }
+    const r = await mergeBackupData(data);
+    render();
+    toast(r.changed ? `Backup loaded: ${r.parts.join(', ')}.` : 'Backup loaded: everything was already up to date.');
+  } catch (_) { toast("That file isn't a Session Notes backup."); }
 });
 
 // Never lose the last few words: save right away when the app is switched away or closed.
@@ -659,5 +700,6 @@ window.addEventListener('pagehide', flushSaves);
   await load();
   state.sessionId = latestSession()?.id || null;
   render();
+  initSync({ toast, build: buildBackupData, merge: mergeBackupData });
   if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
 })();
