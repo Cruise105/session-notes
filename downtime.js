@@ -83,20 +83,24 @@ export const BUYER_BANDS = [
 ];
 export const bandFor = (bands, d6) => bands.find(b => d6 >= b.roll[0] && d6 <= b.roll[1]);
 export const CALDER_FEE = 0.2;
-export const SALE_ADVANCE = 0.1;
+// Calder is a go-between, like a realtor: his fee is always 20% of the real price.
+// Paying up front is a deposit of 20% of the estimated (base) value; he settles the difference honestly on delivery.
+export const FEE_TIMING = { upfront: 'Up front, on the estimated value', delivery: 'On delivery, on the actual price' };
 // DMG price ranges by rarity, as a reminder when you set a base value.
 export const VALUE_HINT = { Common: '50–100 gp', Uncommon: '101–500 gp', Rare: '501–5,000 gp', 'Very Rare': '5,001–50,000 gp', Legendary: '50,001+ gp' };
 
-export function buyMath(base, pct) {
-  const price = Math.round(base * pct / 100);
-  const fee = Math.round(price * CALDER_FEE);
-  return { price, fee, total: price + fee };
+export const upfrontFee = base => Math.round(base * CALDER_FEE);
+export function buyMath(base, pct, timing = 'delivery') {
+  const price = Math.round(base * pct / 100), fee = Math.round(price * CALDER_FEE);
+  const deposit = timing === 'upfront' ? upfrontFee(base) : 0;
+  const settle = fee - deposit; // more owed (+) or refunded (−) on the fee
+  return { timing, price, fee, total: price + fee, deposit, settle, dueOnDelivery: price + settle };
 }
-export function sellMath(base, pct) {
-  const offer = Math.round(base * pct / 100);
-  const fee = Math.round(offer * CALDER_FEE);
-  const advance = Math.round(base * SALE_ADVANCE);
-  return { offer, fee, advance, payout: offer - fee - advance };
+export function sellMath(base, pct, timing = 'delivery') {
+  const offer = Math.round(base * pct / 100), fee = Math.round(offer * CALDER_FEE);
+  const deposit = timing === 'upfront' ? upfrontFee(base) : 0;
+  const settle = deposit - fee; // refunded (+) or still owed (−) on the fee
+  return { timing, offer, fee, deposit, settle, onDelivery: offer - fee + deposit, payout: offer - fee };
 }
 
 export function fmtGp(n) {

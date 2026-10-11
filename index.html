@@ -216,6 +216,7 @@
       <label class="field"><span>Rarity</span><select name="rarity" id="tradeRarity"></select></label>
       <label class="field"><span>Base value (gp)</span><input name="base" type="number" inputmode="numeric" min="0" required></label>
     </div>
+    <label class="field"><span>Calder's 20% fee</span><select name="timing"><option value="delivery">On delivery, on the actual price</option><option value="upfront">Up front: a deposit on the estimated value, settled on delivery</option></select></label>
     <p class="muted small" id="tradeHint"></p>
     <div class="steps">
       <label class="field step"><span id="tradeFindLabel">1. Roll d100</span><input name="d100" type="number" inputmode="numeric" min="1" max="100" placeholder="1–100"></label>

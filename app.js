@@ -7,7 +7,7 @@ import * as H from './health.js';
 import * as T from './downtime.js';
 import * as O from './outbreaks.js';
 
-const APP_VERSION = '1.5.0';
+const APP_VERSION = '1.5.2';
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const todayISO = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
@@ -575,8 +575,13 @@ function trainingCard() {
 function tradeLine(t) {
   const ready = t.state === 'searching' && t.dueAt <= now();
   const buy = t.kind === 'buy';
-  const money = buy ? `${T.fmtGp(t.math.price)} + Calder's 20% (${T.fmtGp(t.math.fee)}) = <b>${T.fmtGp(t.math.total)}</b>`
-    : `Offer ${T.fmtGp(t.math.offer)} − Calder's 20% (${T.fmtGp(t.math.fee)}) − advance already paid (${T.fmtGp(t.math.advance)}) = <b>${T.fmtGp(t.math.payout)} to pay out</b>`;
+  const m = t.math, up = m.timing === 'upfront';
+  const money = m.advance != null // requests made before the fee choice existed
+    ? `Offer ${T.fmtGp(m.offer)} − Calder's 20% (${T.fmtGp(m.fee)}) − advance already paid (${T.fmtGp(m.advance)}) = <b>${T.fmtGp(m.payout)} to pay out</b>`
+    : buy ? (up ? `${feeSettleText(m, true)} <b>${T.fmtGp(m.dueOnDelivery)}</b> due on delivery (${T.fmtGp(m.total)} in all).`
+                : `${T.fmtGp(m.price)} + Calder's 20% (${T.fmtGp(m.fee)}) = <b>${T.fmtGp(m.total)}</b> due on delivery.`)
+    : (up ? `${feeSettleText(m, false)} Calder pays them <b>${T.fmtGp(m.onDelivery)}</b> on delivery (${T.fmtGp(m.payout)} after his fee).`
+          : `Offer ${T.fmtGp(m.offer)} − Calder's 20% (${T.fmtGp(m.fee)}) = <b>${T.fmtGp(m.payout)}</b> paid out on delivery.`);
   return `<li class="trade ${ready ? 'due' : ''}" data-trade="${t.id}">
     <div class="case-top"><div><span class="badge ${buy ? 'rime' : 'avail'}">${buy ? 'Buying' : 'Selling'}</span> <b>${esc(t.item)}</b> <span class="muted small">(${esc(t.rarity)}, base ${T.fmtGp(t.base)}) for ${esc(pcName(t.pcId))}</span></div>
       ${ready ? '<span class="badge due-badge">Calder has news</span>' : ''}</div>
@@ -589,6 +594,12 @@ function tradeLine(t) {
     </div>
   </li>`;
 }
+// "Paid 100 gp up front; his fee came to 113 gp, so 13 gp more is owed" (or refunded).
+function feeSettleText(m, buy) {
+  const diff = buy ? m.settle : -m.settle;
+  const tail = diff > 0 ? `${T.fmtGp(diff)} more is owed` : diff < 0 ? `Calder refunds ${T.fmtGp(-diff)}` : 'it comes out even';
+  return `Paid ${T.fmtGp(m.deposit)} up front; his 20% came to ${T.fmtGp(m.fee)}, so ${tail}.`;
+}
 function calderCard() {
   const list = campaignTrades();
   const open = list.filter(t => t.state === 'searching').sort((a, b) => a.dueAt - b.dueAt);
@@ -598,7 +609,7 @@ function calderCard() {
     <div class="card-head"><h2>Calder Ashveil</h2><span class="muted small">Magic Item Dealer</span>
       <span class="push btn-pair"><button class="btn small" data-act="trade-new" data-kind="buy">Find an item</button><button class="btn small" data-act="trade-new" data-kind="sell">Sell an item</button></span></div>
     ${open.length ? `<ul class="case-list">${open.map(tradeLine).join('')}</ul>` : '<p class="muted">No open requests.</p>'}
-    ${closed.length ? `<details class="done-list"><summary>Past requests (${closed.length})</summary><ul>${closed.map(t => `<li>${t.kind === 'buy' ? 'Buy' : 'Sell'}: ${esc(t.item)} for ${esc(pcName(t.pcId))} · ${esc(word[t.state] || t.state)}${t.state === 'done' ? ` · ${T.fmtGp(t.kind === 'buy' ? t.math.total : t.math.payout)}` : ''} <span class="muted small">· ${esc(C.fmtShort(t.closedAt || t.askedAt))}</span></li>`).join('')}</ul></details>` : ''}
+    ${closed.length ? `<details class="done-list"><summary>Past requests (${closed.length})</summary><ul>${closed.map(t => `<li>${t.kind === 'buy' ? 'Buy' : 'Sell'}: ${esc(t.item)} for ${esc(pcName(t.pcId))} · ${esc(word[t.state] || t.state)}${t.state === 'done' ? ` · ${T.fmtGp(t.kind === 'buy' ? t.math.total : t.math.payout)}` : ''}${t.state === 'failed' && t.upfrontPaid ? ` · ${T.fmtGp(t.upfrontPaid)} fee was paid up front` : ''} <span class="muted small">· ${esc(C.fmtShort(t.closedAt || t.askedAt))}</span></li>`).join('')}</ul></details>` : ''}
   </section>`;
 }
 
@@ -1366,13 +1377,13 @@ function tradeCalc() {
   const need = (buy ? T.FIND_SELLER : T.FIND_BUYER)[r], die = T.WEEKS_DIE[r];
   const d100 = +f.d100.value || 0, found = d100 >= 1 && d100 <= need;
   const band = f.d6.value ? T.bandFor(buy ? T.SELLER_BANDS : T.BUYER_BANDS, +f.d6.value) : null;
-  return { r, buy, need, die, d100, found, band, weeks: +f.weeks.value || 0, pct: +f.pct.value || 0, base: +f.base.value || 0 };
+  return { r, buy, need, die, d100, found, band, weeks: +f.weeks.value || 0, pct: +f.pct.value || 0, base: +f.base.value || 0, timing: f.timing.value };
 }
 function tradeUpdate() {
   const f = $('#tradeForm');
   { const c0 = tradeCalc(); if (c0.band && (!f.pct.value || +f.pct.value < c0.band.lo || +f.pct.value > c0.band.hi)) f.pct.value = Math.round((c0.band.lo + c0.band.hi) / 2); }
   const c = tradeCalc();
-  $('#tradeHint').textContent = `DMG price range for ${c.r.toLowerCase()} items: ${T.VALUE_HINT[c.r]}.${c.buy ? '' : ` Calder pays a 10% advance (${T.fmtGp(Math.round(c.base * T.SALE_ADVANCE))}) when he takes the item.`}`;
+  $('#tradeHint').textContent = `DMG price range for ${c.r.toLowerCase()} items: ${T.VALUE_HINT[c.r]}.${c.timing === 'upfront' && c.base ? ` Paying up front: a ${T.fmtGp(T.upfrontFee(c.base))} deposit now (20% of the estimated value). Calder settles the difference on delivery.` : ''}`;
   $('#tradeFindLabel').textContent = `1. Roll d100: ${c.buy ? 'he finds a seller' : 'he finds a buyer'} on ${c.need} or lower`;
   $('#tradeWeeksLabel').textContent = `2. Roll d${c.die}: weeks it takes`;
   $('#tradeD6Label').textContent = `3. Roll d6: the ${c.buy ? 'seller' : 'buyer'}`;
@@ -1381,11 +1392,12 @@ function tradeUpdate() {
   document.querySelectorAll('#tradeForm .step').forEach((el, i) => { if (i > 0) el.hidden = !showRest; });
   f.weeks.max = c.die;
   let out = '';
-  if (f.d100.value && !c.found) out = `<b>Rolled ${c.d100}: Calder comes back empty-handed.</b> ${c.buy ? "He couldn't find a seller." : "No one will buy it right now, so the item goes back."}${c.buy ? '' : ' What happens to the advance is your call.'}`;
+  if (f.d100.value && !c.found) out = `<b>Rolled ${c.d100}: Calder comes back empty-handed.</b> ${c.buy ? "He couldn't find a seller." : "No one will buy it right now, so the item goes back."}${c.timing === 'upfront' ? ` Whether Calder hands back the ${T.fmtGp(T.upfrontFee(c.base))} paid up front is your call, though his reputation suggests he would.` : ''}`;
   else if (c.found && c.band && c.weeks && c.base) {
     const due = now() + c.weeks * 7 * C.DAY;
-    if (c.buy) { const m = T.buyMath(c.base, c.pct); out = `Seller found <b>${esc(C.fmtShort(due))}</b> (${c.weeks} week${c.weeks > 1 ? 's' : ''}). ${c.band.name} asks ${T.fmtGp(m.price)} + Calder's 20% (${T.fmtGp(m.fee)}) = <b>${T.fmtGp(m.total)}</b>.`; }
-    else { const m = T.sellMath(c.base, c.pct); out = `Buyer found <b>${esc(C.fmtShort(due))}</b> (${c.weeks} week${c.weeks > 1 ? 's' : ''}). ${c.band.name} offers ${T.fmtGp(m.offer)} − Calder's 20% (${T.fmtGp(m.fee)}) − the advance (${T.fmtGp(m.advance)}) = <b>${T.fmtGp(m.payout)}</b> still to pay out.`; }
+    const wk = `(${c.weeks} week${c.weeks > 1 ? 's' : ''})`;
+    if (c.buy) { const m = T.buyMath(c.base, c.pct, c.timing); out = `Seller found <b>${esc(C.fmtShort(due))}</b> ${wk}. ${c.band.name} asks ${T.fmtGp(m.price)}. ${m.timing === 'upfront' ? `${feeSettleText(m, true)} On delivery they pay <b>${T.fmtGp(m.dueOnDelivery)}</b> (${T.fmtGp(m.total)} in all).` : `With Calder's 20% (${T.fmtGp(m.fee)}), <b>${T.fmtGp(m.total)}</b> is due on delivery.`}`; }
+    else { const m = T.sellMath(c.base, c.pct, c.timing); out = `Buyer found <b>${esc(C.fmtShort(due))}</b> ${wk}. ${c.band.name} offers ${T.fmtGp(m.offer)}. ${m.timing === 'upfront' ? `${feeSettleText(m, false)} On delivery Calder pays them <b>${T.fmtGp(m.onDelivery)}</b> (${T.fmtGp(m.payout)} after his fee).` : `Less Calder's 20% (${T.fmtGp(m.fee)}), they get <b>${T.fmtGp(m.payout)}</b> on delivery.`}`; }
   } else out = '<span class="muted">Enter the rolls as you make them. The players see none of this until Calder reports back.</span>';
   $('#tradePreview').innerHTML = out;
 }
@@ -1397,11 +1409,12 @@ $('#tradeDlg').addEventListener('close', async () => {
   const f = $('#tradeForm'), c = tradeCalc();
   if (!f.item.value.trim() || !f.d100.value) { toast('Add the item and the d100 roll first.'); return; }
   const t = { id: uid(), campaignId: state.campaignId, kind: tradeKind, pcId: f.pc.value, item: f.item.value.trim(), rarity: c.r, base: c.base, askedAt: now(), d100: c.d100, createdAt: Date.now() };
+  t.feeTiming = c.timing; if (c.timing === 'upfront') t.upfrontPaid = T.upfrontFee(c.base);
   if (!c.found) { t.state = 'failed'; t.closedAt = now(); await save('trades', t); toast(`Calder couldn't find ${c.buy ? 'a seller' : 'a buyer'} for ${t.item}.`); render(); return; }
   if (!c.band || !c.weeks) { toast('Add the weeks and the d6 roll too.'); return; }
   Object.assign(t, { weeks: Math.min(c.die, Math.max(1, c.weeks)), d6: +f.d6.value, band: c.band.name, pct: c.pct, state: 'searching' });
   t.dueAt = now() + t.weeks * 7 * C.DAY;
-  t.math = c.buy ? T.buyMath(c.base, c.pct) : T.sellMath(c.base, c.pct);
+  t.math = c.buy ? T.buyMath(c.base, c.pct, c.timing) : T.sellMath(c.base, c.pct, c.timing);
   await save('trades', t); toast(`Calder is on it. He'll have news ${C.fmtShort(t.dueAt)}.`); render();
 });
 
