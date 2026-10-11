@@ -1,4 +1,4 @@
-# Session Notes (stage 3: diseases and survival)
+# Session Notes (stage 4: training, Calder and cards)
 
 Your printed session sheet as an app for the Galaxy Tab S9+. It runs in Chrome, installs to your home screen, and works offline once installed.
 
@@ -9,8 +9,15 @@ Your printed session sheet as an app for the Galaxy Tab S9+. It runs in Chrome, 
 - **Concordant Reckoning calendar** with your 13 months, 7 weekdays, both moons (Selune and Ruidus), the solstices, equinoxes and the Long Hunt. Tap the date at the top to move time forward: +10 minutes, +1 hour, a long rest, next dawn, +1 day, +1 week, or an exact date.
 - **Notes** you write with the S Pen. S Pen to Text turns your handwriting into text, so the History tab can search it.
 - **Ink pages** for sketches: the pen draws, your finger scrolls, and holding the S Pen's side button erases.
-- **Shopping** as a plain notes box for now. The Calder Ashveil tracker comes in stage 4.
+- **Shopping notes** for anything else from the session's shopping.
 - **Google Drive sync** between your PC and tablet, the same way the Bestiary does it, plus backup files.
+
+## New in stage 4
+
+- **Downtime training** using your Ability & Proficiency Improvement rules: 10 − modifier weeks, adjusted for the trainer (none +50%, Apprentice +25%, Expert −25%), with the cost per day from your price table (Apprentice −10%, Expert +10%; a party member trains for free). It counts calendar days, shows a progress bar and finish date, can be paused, and finishes itself on the right day. Finished training is listed on each PC's Party card. Your table has no price for saving throws, so set that one yourself.
+- **Calder Ashveil.** "Find an item" and "Sell an item" walk you through your rolls: d100 to find a seller or buyer, the weeks die by rarity, the d6 for the seller or buyer, and the percent within their range (or tap Pick in range). It works out his 20% fee, and for sales the 10% advance on the base value. When the date comes, the request lights up with "Calder has news."
+- **Cards to make.** A checklist of magic items that need a printed card. Anything bought through Calder is added automatically.
+- **Jump links** at the top of the Session tab, with a ! when a disease check or Calder's news is waiting.
 
 ## New in stage 3
 

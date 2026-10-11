@@ -149,6 +149,56 @@
   </form>
 </dialog>
 
+<dialog id="trainDlg" class="dlg-wrap">
+  <form class="dlg" method="dialog" id="trainForm">
+    <h2>Start training</h2>
+    <div class="field-row">
+      <label class="field"><span>Who</span><select name="pc" id="trainPc"></select></label>
+      <label class="field"><span>Training in</span><select name="kind" id="trainKind"></select></label>
+    </div>
+    <div class="field-row" id="trainWhatRow">
+      <label class="field" id="trainWhatWrap"><span id="trainWhatLabel">What</span><span id="trainWhat"></span></label>
+      <label class="field" id="trainSubWrap"><span id="trainSubLabel">Type</span><select name="sub" id="trainSub"></select></label>
+    </div>
+    <div class="field-row">
+      <label class="field"><span>Linked ability</span><select name="ability" id="trainAbility"></select></label>
+      <label class="field"><span>Their modifier for it</span><input name="mod" type="number" inputmode="numeric" min="-5" max="10" value="0" required></label>
+    </div>
+    <div class="field-row">
+      <label class="field"><span>Trainer</span><select name="trainer" id="trainTrainer"></select></label>
+      <label class="field"><span>Trainer's name</span><input name="trainerName" autocomplete="off" placeholder="Optional"></label>
+    </div>
+    <label class="check"><input type="checkbox" name="partyMember"> <span>The trainer is a party member (no fee)</span></label>
+    <p class="muted small" id="trainRule"></p>
+    <label class="field"><span>Cost per day (gp)</span><input name="cost" type="number" inputmode="decimal" min="0" step="0.1"></label>
+    <div class="preview" id="trainPreview"></div>
+    <div class="row"><button class="btn" value="cancel" formnovalidate>Cancel</button><button class="btn primary" value="save">Start training</button></div>
+  </form>
+</dialog>
+
+<dialog id="tradeDlg" class="dlg-wrap">
+  <form class="dlg" method="dialog" id="tradeForm">
+    <h2 id="tradeTitle">Calder</h2>
+    <div class="field-row">
+      <label class="field"><span>For</span><select name="pc" id="tradePc"></select></label>
+      <label class="field"><span>Item</span><input name="item" required autocomplete="off" placeholder="+1 Wand of the War Mage"></label>
+    </div>
+    <div class="field-row">
+      <label class="field"><span>Rarity</span><select name="rarity" id="tradeRarity"></select></label>
+      <label class="field"><span>Base value (gp)</span><input name="base" type="number" inputmode="numeric" min="0" required></label>
+    </div>
+    <p class="muted small" id="tradeHint"></p>
+    <div class="steps">
+      <label class="field step"><span id="tradeFindLabel">1. Roll d100</span><input name="d100" type="number" inputmode="numeric" min="1" max="100" placeholder="1–100"></label>
+      <label class="field step"><span id="tradeWeeksLabel">2. Weeks</span><input name="weeks" type="number" inputmode="numeric" min="1"></label>
+      <label class="field step"><span id="tradeD6Label">3. Roll d6</span><input name="d6" type="number" inputmode="numeric" min="1" max="6"></label>
+      <label class="field step"><span id="tradePctLabel">4. Percent</span><span class="inline-pair"><input name="pct" type="number" inputmode="numeric"><button type="button" class="btn small" id="tradePick">Pick in range</button></span></label>
+    </div>
+    <div class="preview" id="tradePreview"></div>
+    <div class="row"><button class="btn" value="cancel" formnovalidate>Cancel</button><button class="btn primary" value="save" id="tradeSave">Save</button></div>
+  </form>
+</dialog>
+
 <div id="updateBar" class="update-bar" hidden><span>A new version of Session Notes is ready.</span><button class="btn primary small" type="button">Restart now</button></div>
 
 <dialog id="locPickDlg" class="dlg-wrap">

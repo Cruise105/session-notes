@@ -4,8 +4,9 @@ import { openInkEditor, renderThumb } from './ink.js';
 import { initSync } from './sync.js';
 import * as W from './weather.js';
 import * as H from './health.js';
+import * as T from './downtime.js';
 
-const APP_VERSION = '1.3.0';
+const APP_VERSION = '1.4.0';
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const todayISO = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
@@ -13,7 +14,7 @@ const fmtReal = iso => { if (!iso) return ''; const [y, m, d] = iso.split('-').m
 const fold = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 
 const state = {
-  campaigns: [], pcs: [], sessions: [], ink: [], locations: [], weather: [], diseases: [], cases: [], outbreaks: [],
+  campaigns: [], pcs: [], sessions: [], ink: [], locations: [], weather: [], diseases: [], cases: [], outbreaks: [], training: [], trades: [], cards: [],
   campaignId: null, view: 'session', sessionId: null, calMonth: null, calDay: null, query: '',
 };
 
@@ -143,7 +144,26 @@ async function applyClock(t0, t1, { longRest = false } = {}) {
     for (const p of pcs) await save('pcs', p);
   }
   await processCases();
+  await processDowntime();
   return msgs;
+}
+
+// ---------- downtime helpers
+const pcName = id => (id === 'party' ? 'The party' : state.pcs.find(p => p.id === id)?.name || '?');
+const campaignTraining = () => state.training.filter(t => t.campaignId === state.campaignId && !t.deleted);
+const campaignTrades = () => state.trades.filter(t => t.campaignId === state.campaignId && !t.deleted);
+const campaignCards = () => state.cards.filter(c => c.campaignId === state.campaignId && !c.deleted);
+async function processDowntime() {
+  for (const t of campaignTraining()) {
+    if (t.state !== 'active') continue;
+    const st = T.trainingStatus(t, now());
+    if (st.done >= st.total) {
+      t.state = 'complete'; t.completedAt = st.finishAt; await save('training', t);
+      const p = state.pcs.find(x => x.id === t.pcId);
+      if (p) { p.learned = [...(p.learned || []), { at: st.finishAt, text: `${t.what} (${T.KINDS[t.kind].label})` }]; await save('pcs', p); }
+      toast(`${p?.name || 'Someone'} finished training: ${t.what}.`);
+    }
+  }
 }
 
 // Diseases in decline get better on their own each period (Darker Dungeons: automatic success).
@@ -210,8 +230,8 @@ function newPc(fields) {
 }
 
 async function load() {
-  const [campaigns, pcs, sessions, ink, locations, weather, diseases, cases, outbreaks] = await Promise.all(STORES.map(s => db.all(s)));
-  Object.assign(state, { campaigns, pcs, sessions, ink, locations, weather, diseases, cases, outbreaks });
+  const [campaigns, pcs, sessions, ink, locations, weather, diseases, cases, outbreaks, training, trades, cards] = await Promise.all(STORES.map(s => db.all(s)));
+  Object.assign(state, { campaigns, pcs, sessions, ink, locations, weather, diseases, cases, outbreaks, training, trades, cards });
   const haveD = new Set(state.diseases.map(d => d.id));
   const addD = H.SEED_DISEASES.filter(d => !haveD.has(d.id)).map(d => ({ ...d, stages: d.stages.slice(), updatedAt: 0 }));
   if (addD.length) { await db.putMany('diseases', addD); state.diseases.push(...addD); }
@@ -375,7 +395,7 @@ function survivalCard() {
         <span>Water <button class="mini-btn" data-act="ration" data-r="water" data-d="-1">−</button><b>${sv.water}</b><button class="mini-btn" data-act="ration" data-r="water" data-d="1">+</button></span></td>` : ''}
     </tr>`;
   }).join('');
-  return `<section class="card surv-card">
+  return `<section class="card surv-card" id="sec-survival">
     <div class="card-head"><h2>Survival</h2>
       <div class="seg small-seg" role="radiogroup" aria-label="Supplies">
         <button type="button" role="radio" data-act="supplies" data-v="plentiful" aria-checked="${!scarce}">Plentiful supplies</button>
@@ -432,7 +452,7 @@ function diseaseCard() {
   const list = openCases().sort((a, b) => a.dueAt - b.dueAt);
   const loc = hereLoc();
   const ob = loc ? state.outbreaks.filter(o => o.campaignId === state.campaignId && !o.deleted && !o.endedAt && o.locationId === loc.id) : [];
-  return `<section class="card dis-card">
+  return `<section class="card dis-card" id="sec-diseases">
     <div class="card-head"><h2>Diseases</h2><span class="muted small">Darker Dungeons rules</span><button class="btn small push" data-act="exposure">Log an exposure</button></div>
     ${ob.map(o => `<p class="outbreak">Going around in ${esc(loc.name)}: <b>${esc(disById(o.diseaseId)?.name || '?')}</b> since ${esc(C.fmtShort(o.startAt))}${o.note ? ` · ${esc(o.note)}` : ''}</p>`).join('')}
     ${list.length ? `<ul class="case-list">${list.map(caseLine).join('')}</ul>` : '<p class="muted">No one is sick.</p>'}
@@ -463,6 +483,75 @@ function worldDiseases() {
         <div class="row left"><button class="btn small" data-act="disease-edit">Edit</button></div>
       </details>`).join('')}</div>
     </section>`;
+}
+
+// ---------- training card
+function trainingCard() {
+  const list = campaignTraining();
+  const active = list.filter(t => t.state === 'active').sort((a, b) => T.trainingStatus(a, now()).finishAt - T.trainingStatus(b, now()).finishAt);
+  const done = list.filter(t => t.state === 'complete').sort((a, b) => b.completedAt - a.completedAt);
+  const row = t => {
+    const st = T.trainingStatus(t, now()), left = st.total - st.done;
+    return `<li class="train" data-train="${t.id}">
+      <div class="train-top"><b>${esc(pcName(t.pcId))}</b>: ${esc(t.what)} <span class="muted small">(${T.KINDS[t.kind].label}, ${esc(t.ability)} ${t.mod >= 0 ? '+' : ''}${t.mod})</span>
+        ${st.paused ? '<span class="badge">Paused</span>' : ''}</div>
+      <div class="bar" role="progressbar" aria-valuenow="${Math.round(st.frac * 100)}" aria-valuemin="0" aria-valuemax="100"><i style="width:${(st.frac * 100).toFixed(1)}%"></i></div>
+      <div class="train-meta small">${C.fmtSpan(left)} left · finishes ${esc(C.fmtShort(st.finishAt))}${st.paused ? ' if resumed now' : ''} · ${T.KINDS[t.kind].hours} hours a day · ${esc(T.TRAINERS[t.trainer].label)}${t.trainerName ? ` (${esc(t.trainerName)})` : ''} · ${t.costPerDay ? `${T.fmtGp(t.costPerDay)} a day, ${T.fmtGp(t.costPerDay * t.days)} in all` : 'no fee'}</div>
+      <div class="case-btns"><button class="btn small" data-act="train-pause">${st.paused ? 'Resume' : 'Pause'}</button><button class="link-btn" data-act="train-remove">Remove</button></div>
+    </li>`;
+  };
+  return `<section class="card" id="sec-training">
+    <div class="card-head"><h2>Downtime training</h2><span class="muted small">Your Ability &amp; Proficiency Improvement rules</span><button class="btn small push" data-act="train-new">Start training</button></div>
+    ${active.length ? `<ul class="train-list">${active.map(row).join('')}</ul>` : '<p class="muted">No one is training.</p>'}
+    ${done.length ? `<details class="done-list"><summary>Finished (${done.length})</summary><ul>${done.map(t => `<li>${esc(pcName(t.pcId))}: ${esc(t.what)} <span class="muted small">· ${esc(C.fmtShort(t.completedAt))}</span></li>`).join('')}</ul></details>` : ''}
+  </section>`;
+}
+
+// ---------- Calder card
+function tradeLine(t) {
+  const ready = t.state === 'searching' && t.dueAt <= now();
+  const buy = t.kind === 'buy';
+  const money = buy ? `${T.fmtGp(t.math.price)} + Calder's 20% (${T.fmtGp(t.math.fee)}) = <b>${T.fmtGp(t.math.total)}</b>`
+    : `Offer ${T.fmtGp(t.math.offer)} − Calder's 20% (${T.fmtGp(t.math.fee)}) − advance already paid (${T.fmtGp(t.math.advance)}) = <b>${T.fmtGp(t.math.payout)} to pay out</b>`;
+  return `<li class="trade ${ready ? 'due' : ''}" data-trade="${t.id}">
+    <div class="case-top"><div><span class="badge ${buy ? 'rime' : 'avail'}">${buy ? 'Buying' : 'Selling'}</span> <b>${esc(t.item)}</b> <span class="muted small">(${esc(t.rarity)}, base ${T.fmtGp(t.base)}) for ${esc(pcName(t.pcId))}</span></div>
+      ${ready ? '<span class="badge due-badge">Calder has news</span>' : ''}</div>
+    <div class="case-status">${ready ? `${buy ? 'He found a seller' : 'He found a buyer'}: ${esc(t.band)} at ${t.pct}%.` : `Searching · ${buy ? 'seller' : 'buyer'} found ${esc(C.fmtShort(t.dueAt))} (${C.fmtSpan(Math.max(0, t.dueAt - now()))} from now). He'll be a ${esc(t.band.toLowerCase())} at ${t.pct}%.`}</div>
+    <div class="small">${money}</div>
+    <div class="case-btns">
+      ${ready ? (buy ? `<button class="btn small primary" data-act="trade-done">They bought it</button><button class="btn small" data-act="trade-pass">They passed</button>`
+                      : `<button class="btn small primary" data-act="trade-done">Paid out</button><button class="btn small" data-act="trade-pass">Called off</button>`) : ''}
+      <button class="link-btn" data-act="trade-remove">Remove</button>
+    </div>
+  </li>`;
+}
+function calderCard() {
+  const list = campaignTrades();
+  const open = list.filter(t => t.state === 'searching').sort((a, b) => a.dueAt - b.dueAt);
+  const closed = list.filter(t => t.state !== 'searching').sort((a, b) => (b.closedAt || b.askedAt) - (a.closedAt || a.askedAt));
+  const word = { done: 'done', declined: 'passed or called off', failed: "Calder couldn't find one" };
+  return `<section class="card" id="sec-calder">
+    <div class="card-head"><h2>Calder Ashveil</h2><span class="muted small">Magic Item Dealer</span>
+      <span class="push btn-pair"><button class="btn small" data-act="trade-new" data-kind="buy">Find an item</button><button class="btn small" data-act="trade-new" data-kind="sell">Sell an item</button></span></div>
+    ${open.length ? `<ul class="case-list">${open.map(tradeLine).join('')}</ul>` : '<p class="muted">No open requests.</p>'}
+    ${closed.length ? `<details class="done-list"><summary>Past requests (${closed.length})</summary><ul>${closed.map(t => `<li>${t.kind === 'buy' ? 'Buy' : 'Sell'}: ${esc(t.item)} for ${esc(pcName(t.pcId))} · ${esc(word[t.state] || t.state)}${t.state === 'done' ? ` · ${T.fmtGp(t.kind === 'buy' ? t.math.total : t.math.payout)}` : ''} <span class="muted small">· ${esc(C.fmtShort(t.closedAt || t.askedAt))}</span></li>`).join('')}</ul></details>` : ''}
+  </section>`;
+}
+
+// ---------- cards to make
+function cardsCard() {
+  const list = campaignCards();
+  const todo = list.filter(c => !c.done).sort((a, b) => a.addedAt - b.addedAt), made = list.filter(c => c.done);
+  return `<section class="card" id="sec-cards">
+    <div class="card-head"><h2>Cards to make</h2><span class="muted small">Magic items the party has that need a printed card.</span></div>
+    <div class="card-add">
+      <input id="cardItem" placeholder="Item name" autocomplete="off" aria-label="Item name">
+      <select id="cardPc" aria-label="Who has it"><option value="party">The party</option>${activePcs().map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select>
+      <button class="btn small" data-act="card-add">Add</button>
+    </div>
+    ${todo.length ? `<ul class="todo">${todo.map(c => `<li data-card="${c.id}"><label class="check"><input type="checkbox" data-act-change="card-done"> <span><b>${esc(c.item)}</b> <span class="muted small">· ${esc(pcName(c.pcId))}${c.note ? ` · ${esc(c.note)}` : ''} · ${esc(C.fmtShort(c.addedAt))}</span></span></label><button class="link-btn" data-act="card-remove">Remove</button></li>`).join('')}</ul>` : '<p class="muted">Nothing waiting for a card.</p>'}
+    ${made.length ? `<details class="done-list"><summary>Made (${made.length})</summary><ul>${made.map(c => `<li data-card="${c.id}">${esc(c.item)} <span class="muted small">· ${esc(pcName(c.pcId))}</span> <button class="link-btn" data-act="card-undo">Not made yet</button></li>`).join('')}</ul></details>` : ''}
+  </section>`;
 }
 
 function viewWorld() {
@@ -536,9 +625,10 @@ function viewSession() {
       </div>
     </div>
 
+    ${open ? `<nav class="jump" aria-label="Jump to">${[['party', 'Party'], ['notes', 'Notes'], ['ink', 'Ink'], ['diseases', 'Diseases'], ...(survivalOn() ? [['survival', 'Survival']] : []), ['training', 'Training'], ['calder', 'Calder'], ['cards', 'Cards']].map(([id, l]) => `<a href="#sec-${id}" data-jump="${id}">${l}${id === 'diseases' && dueCases().length ? ' <b class="ex">!</b>' : ''}${id === 'calder' && campaignTrades().some(t => t.state === 'searching' && t.dueAt <= now()) ? ' <b class="ex">!</b>' : ''}</a>`).join('')}</nav>` : ''}
     ${open ? wxCard() : (s.locationId && locById(s.locationId) ? `<p class="muted small sess-loc">Started in ${esc(locById(s.locationId).name)}${(s.visited || []).length ? `, then ${(s.visited || []).map(v => esc(locById(v.locationId)?.name || '?')).join(', ')}` : ''}.</p>` : '')}
 
-    <section class="card">
+    <section class="card" id="sec-party">
       <h2>Party</h2>
       <div class="table-wrap"><table class="party">
         <thead><tr><th>PC</th><th>Max HP</th><th>AC</th><th>Pass. Perc.</th><th>Diseases</th><th>Deaths</th><th>Favor of Fate</th></tr></thead>
@@ -554,24 +644,25 @@ function viewSession() {
       </table></div>
       ${open ? '' : '<p class="muted small">Stats as they were when this session ended.</p>'}
     </section>
-    ${open ? diseaseCard() + survivalCard() : ''}
 
-    <section class="card notes-card">
+
+    <section class="card notes-card" id="sec-notes">
       <div class="card-head"><h2>Notes</h2><span class="muted small">Write with the S Pen; it turns into text you can search.</span></div>
       <textarea class="ruled grow" data-field="notes" data-min="420" placeholder="What happened this session…">${esc(s.notes)}</textarea>
     </section>
 
     <section class="card">
-      <div class="card-head"><h2>Ink pages</h2><span class="muted small">Freehand pages for sketches and quick scribbles.</span></div>
+      <div class="card-head" id="sec-ink"><h2>Ink pages</h2><span class="muted small">Freehand pages for sketches and quick scribbles.</span></div>
       <div class="ink-grid">
         ${pages.map((pg, i) => `<button class="ink-thumb" data-act="open-ink" data-id="${pg.id}" aria-label="Open ink page ${i + 1}"><canvas data-ink="${pg.id}"></canvas><span>Page ${i + 1}</span></button>`).join('')}
         <button class="ink-thumb add" data-act="new-ink"><span class="plus">+</span><span>New ink page</span></button>
       </div>
     </section>
 
+    ${open ? diseaseCard() + survivalCard() + trainingCard() + calderCard() + cardsCard() : ''}
     <section class="card">
-      <div class="card-head"><h2>Shopping</h2><span class="muted small">Items to make cards for, dealer requests. A proper tracker comes in a later update.</span></div>
-      <textarea class="ruled grow" data-field="shopping" data-min="140" placeholder="Bought, ordered, or waiting on…">${esc(s.shopping)}</textarea>
+      <div class="card-head"><h2>Shopping notes</h2><span class="muted small">Anything else to remember from this session's shopping.</span></div>
+      <textarea class="ruled grow" data-field="shopping" data-min="110" placeholder="Bought, sold, haggled over…">${esc(s.shopping)}</textarea>
     </section>
 
     <div class="session-actions">
@@ -607,6 +698,7 @@ function viewParty() {
           ${deaths.length ? `<ol class="death-list">${deaths.map(d => `<li><b>${esc(C.fmtShort(d.at))}</b> ${esc(d.note || 'No details')}${d.favor ? ' <span class="badge spent">Revived by Favor of Fate</span>' : ''} <button class="link-btn" data-act="del-death" data-id="${d.id}" aria-label="Remove this death">Remove</button></li>`).join('')}</ol>` : '<p class="muted small">None yet.</p>'}
           <button class="btn small" data-act="death">Log a death</button>
         </div>
+        ${(p.learned || []).length ? `<div><h3>Training finished</h3><ul class="death-list">${p.learned.map(l => `<li><b>${esc(C.fmtShort(l.at))}</b> ${esc(l.text)}</li>`).join('')}</ul></div>` : ''}
         <div>
           <h3>Favor of Fate</h3>
           ${p.favor?.spent
@@ -1029,6 +1121,127 @@ $('#disDlg').addEventListener('close', async () => {
   await save('diseases', d); render();
 });
 
+// ---------- training dialog
+function openTraining() {
+  const f = $('#trainForm'); f.reset();
+  $('#trainPc').innerHTML = activePcs().map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+  $('#trainKind').innerHTML = Object.entries(T.KINDS).map(([k, v]) => `<option value="${k}">${esc(v.label)}</option>`).join('');
+  $('#trainTrainer').innerHTML = Object.entries(T.TRAINERS).map(([k, v]) => `<option value="${k}" ${k === 'none' ? 'selected' : ''}>${esc(v.label)}</option>`).join('');
+  f.mod.value = 0; trainKindChanged(); $('#trainDlg').returnValue = ''; $('#trainDlg').showModal();
+}
+function trainKindChanged() {
+  const f = $('#trainForm'), k = f.kind.value;
+  const whatSel = opts => `<select name="what">${opts.map(o => `<option>${esc(o)}</option>`).join('')}</select>`;
+  const whatTxt = ph => `<input name="what" autocomplete="off" placeholder="${ph}">`;
+  let what = '', subs = null, subLabel = 'Type', abil = T.ABILITIES;
+  if (k === 'language') { what = whatTxt('Giant'); subs = ['Common', 'Uncommon']; subLabel = 'Common or uncommon'; abil = ['Intelligence']; }
+  if (k === 'skill') what = whatSel(T.SKILLS.map(x => x[0]));
+  if (k === 'tool') what = whatSel(T.TOOLS.map(x => x[0]));
+  if (k === 'weapon') { what = whatTxt('Longbow'); subs = ['Simple', 'Martial', 'Firearm']; subLabel = 'Weapon type'; abil = ['Strength', 'Dexterity']; }
+  if (k === 'save' || k === 'ability') what = whatSel(T.ABILITIES);
+  $('#trainWhatLabel').textContent = k === 'save' ? 'Saving throw' : k === 'ability' ? 'Ability' : k === 'language' ? 'Language' : k === 'weapon' ? 'Weapon' : k === 'tool' ? 'Tool' : 'Skill';
+  $('#trainWhat').innerHTML = what;
+  $('#trainSubWrap').hidden = !subs;
+  $('#trainSub').innerHTML = (subs || []).map(o => `<option>${o}</option>`).join('');
+  $('#trainAbility').innerHTML = abil.map(a => `<option>${a}</option>`).join('');
+  trainWhatChanged();
+}
+function trainWhatChanged() {
+  const f = $('#trainForm'), k = f.kind.value, w = f.what?.value;
+  if (k === 'skill') { const sk = T.SKILLS.find(x => x[0] === w); $('#trainAbility').innerHTML = `<option>${sk[1]}</option>`; }
+  if (k === 'tool') { const tl = T.TOOLS.find(x => x[0] === w); $('#trainAbility').innerHTML = tl[1].map(a => `<option>${a}</option>`).join(''); }
+  if (k === 'save' || k === 'ability') $('#trainAbility').innerHTML = `<option>${w}</option>`;
+  const rules = { language: 'At least 4 hours a day studying and practicing the language.', skill: 'At least 2 hours a day.', tool: 'At least 2 hours a day.', weapon: 'At least 2 hours a day.',
+    save: 'At least 3 hours a day practicing that save. Your price table has no cost for saving throws, so set one.', ability: 'At least 8 hours a day. Raises the score by 1. A trainer must be proficient in that ability\'s saving throw.' };
+  $('#trainRule').textContent = `${rules[k]} A party member can train them if they're proficient in it. Travel time counts toward the hours.`;
+  trainCostDefault();
+}
+function trainCostDefault() {
+  const f = $('#trainForm');
+  const c = T.dailyCost(f.kind.value, f.sub.value, f.trainer.value, f.partyMember.checked);
+  f.cost.value = c == null ? '' : c;
+  trainPreview();
+}
+function trainPreview() {
+  const f = $('#trainForm');
+  const days = T.trainingDays(+f.mod.value, f.trainer.value), weeks = Math.max(1, 10 - (+f.mod.value || 0));
+  const cost = f.cost.value === '' ? null : +f.cost.value;
+  $('#trainPreview').innerHTML = `<b>${weeks} weeks</b> base (10 − modifier)${f.trainer.value !== 'skilled' ? `, ${f.trainer.value === 'none' ? '+50%' : f.trainer.value === 'apprentice' ? '+25%' : '−25%'} for the trainer` : ''} = <b>${C.fmtSpan(days * C.DAY)}</b> (${days} days).
+    Finishes <b>${esc(C.fmtShort(now() + days * C.DAY))}</b>. ${cost == null ? 'No cost set.' : cost ? `Cost: ${T.fmtGp(cost)} a day, <b>${T.fmtGp(cost * days)}</b> in all.` : 'No fee.'}`;
+}
+$('#trainForm').addEventListener('change', e => {
+  const n = e.target.name;
+  if (n === 'kind') trainKindChanged();
+  else if (n === 'what') trainWhatChanged();
+  else if (n === 'sub' || n === 'trainer' || n === 'partyMember') trainCostDefault();
+  else trainPreview();
+});
+$('#trainForm').addEventListener('input', e => { if (e.target.name === 'mod' || e.target.name === 'cost') trainPreview(); });
+$('#trainDlg').addEventListener('close', async () => {
+  if ($('#trainDlg').returnValue !== 'save') return;
+  const f = $('#trainForm');
+  const what = (f.what?.value || '').trim() || 'Training';
+  const t = { id: uid(), campaignId: state.campaignId, pcId: f.pc.value, kind: f.kind.value, what: f.kind.value === 'language' && f.sub.value ? `${what}` : what,
+    sub: $('#trainSubWrap').hidden ? null : f.sub.value, ability: f.ability.value, mod: +f.mod.value || 0, trainer: f.trainer.value, trainerName: f.trainerName.value.trim(),
+    partyMember: f.partyMember.checked, costPerDay: f.cost.value === '' ? 0 : +f.cost.value, days: T.trainingDays(+f.mod.value, f.trainer.value),
+    startAt: now(), pausedAt: null, pausedTotal: 0, state: 'active', createdAt: Date.now() };
+  await save('training', t);
+  toast(`${pcName(t.pcId)} starts training: ${t.what}. Finishes ${C.fmtShort(now() + t.days * C.DAY)}.`); render();
+});
+
+// ---------- Calder dialog
+let tradeKind = 'buy';
+function openTrade(kind) {
+  tradeKind = kind; const f = $('#tradeForm'); f.reset();
+  $('#tradeTitle').textContent = kind === 'buy' ? 'Calder: find an item' : 'Calder: sell an item';
+  $('#tradePc').innerHTML = `<option value="party">The party</option>${activePcs().map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}`;
+  $('#tradeRarity').innerHTML = T.RARITIES.map(r => `<option ${r === 'Uncommon' ? 'selected' : ''}>${r}</option>`).join('');
+  tradeUpdate(); $('#tradeDlg').returnValue = ''; $('#tradeDlg').showModal();
+}
+function tradeCalc() {
+  const f = $('#tradeForm'), r = f.rarity.value, buy = tradeKind === 'buy';
+  const need = (buy ? T.FIND_SELLER : T.FIND_BUYER)[r], die = T.WEEKS_DIE[r];
+  const d100 = +f.d100.value || 0, found = d100 >= 1 && d100 <= need;
+  const band = f.d6.value ? T.bandFor(buy ? T.SELLER_BANDS : T.BUYER_BANDS, +f.d6.value) : null;
+  return { r, buy, need, die, d100, found, band, weeks: +f.weeks.value || 0, pct: +f.pct.value || 0, base: +f.base.value || 0 };
+}
+function tradeUpdate() {
+  const f = $('#tradeForm');
+  { const c0 = tradeCalc(); if (c0.band && (!f.pct.value || +f.pct.value < c0.band.lo || +f.pct.value > c0.band.hi)) f.pct.value = Math.round((c0.band.lo + c0.band.hi) / 2); }
+  const c = tradeCalc();
+  $('#tradeHint').textContent = `DMG price range for ${c.r.toLowerCase()} items: ${T.VALUE_HINT[c.r]}.${c.buy ? '' : ` Calder pays a 10% advance (${T.fmtGp(Math.round(c.base * T.SALE_ADVANCE))}) when he takes the item.`}`;
+  $('#tradeFindLabel').textContent = `1. Roll d100: ${c.buy ? 'he finds a seller' : 'he finds a buyer'} on ${c.need} or lower`;
+  $('#tradeWeeksLabel').textContent = `2. Roll d${c.die}: weeks it takes`;
+  $('#tradeD6Label').textContent = `3. Roll d6: the ${c.buy ? 'seller' : 'buyer'}`;
+  $('#tradePctLabel').textContent = c.band ? `4. ${c.band.name}: ${c.band.lo}–${c.band.hi}% of base` : '4. Percent of base value';
+  const showRest = !f.d100.value || c.found;
+  document.querySelectorAll('#tradeForm .step').forEach((el, i) => { if (i > 0) el.hidden = !showRest; });
+  f.weeks.max = c.die;
+  let out = '';
+  if (f.d100.value && !c.found) out = `<b>Rolled ${c.d100}: Calder comes back empty-handed.</b> ${c.buy ? "He couldn't find a seller." : "No one will buy it right now, so the item goes back."}${c.buy ? '' : ' What happens to the advance is your call.'}`;
+  else if (c.found && c.band && c.weeks && c.base) {
+    const due = now() + c.weeks * 7 * C.DAY;
+    if (c.buy) { const m = T.buyMath(c.base, c.pct); out = `Seller found <b>${esc(C.fmtShort(due))}</b> (${c.weeks} week${c.weeks > 1 ? 's' : ''}). ${c.band.name} asks ${T.fmtGp(m.price)} + Calder's 20% (${T.fmtGp(m.fee)}) = <b>${T.fmtGp(m.total)}</b>.`; }
+    else { const m = T.sellMath(c.base, c.pct); out = `Buyer found <b>${esc(C.fmtShort(due))}</b> (${c.weeks} week${c.weeks > 1 ? 's' : ''}). ${c.band.name} offers ${T.fmtGp(m.offer)} − Calder's 20% (${T.fmtGp(m.fee)}) − the advance (${T.fmtGp(m.advance)}) = <b>${T.fmtGp(m.payout)}</b> still to pay out.`; }
+  } else out = '<span class="muted">Enter the rolls as you make them. The players see none of this until Calder reports back.</span>';
+  $('#tradePreview').innerHTML = out;
+}
+$('#tradeForm').addEventListener('input', tradeUpdate);
+$('#tradeForm').addEventListener('change', tradeUpdate);
+$('#tradePick').addEventListener('click', () => { const c = tradeCalc(); if (!c.band) return; $('#tradeForm').pct.value = c.band.lo + Math.floor(Math.random() * (c.band.hi - c.band.lo + 1)); tradeUpdate(); });
+$('#tradeDlg').addEventListener('close', async () => {
+  if ($('#tradeDlg').returnValue !== 'save') return;
+  const f = $('#tradeForm'), c = tradeCalc();
+  if (!f.item.value.trim() || !f.d100.value) { toast('Add the item and the d100 roll first.'); return; }
+  const t = { id: uid(), campaignId: state.campaignId, kind: tradeKind, pcId: f.pc.value, item: f.item.value.trim(), rarity: c.r, base: c.base, askedAt: now(), d100: c.d100, createdAt: Date.now() };
+  if (!c.found) { t.state = 'failed'; t.closedAt = now(); await save('trades', t); toast(`Calder couldn't find ${c.buy ? 'a seller' : 'a buyer'} for ${t.item}.`); render(); return; }
+  if (!c.band || !c.weeks) { toast('Add the weeks and the d6 roll too.'); return; }
+  Object.assign(t, { weeks: Math.min(c.die, Math.max(1, c.weeks)), d6: +f.d6.value, band: c.band.name, pct: c.pct, state: 'searching' });
+  t.dueAt = now() + t.weeks * 7 * C.DAY;
+  t.math = c.buy ? T.buyMath(c.base, c.pct) : T.sellMath(c.base, c.pct);
+  await save('trades', t); toast(`Calder is on it. He'll have news ${C.fmtShort(t.dueAt)}.`); render();
+});
+
 // ---------- survival dialogs
 let gearPc = null;
 function openGear(p) {
@@ -1203,12 +1416,52 @@ $('#view').addEventListener('click', async e => {
     case 'outbreak-end': { const o = state.outbreaks.find(x => x.id === b.closest('[data-ob]').dataset.ob); o.endedAt = now(); await save('outbreaks', o); break; }
     case 'outbreak-del': { const o = state.outbreaks.find(x => x.id === b.closest('[data-ob]').dataset.ob); o.deleted = true; await save('outbreaks', o); break; }
     case 'disease-new': openDisease(null); return;
+    // ----- training
+    case 'train-new': openTraining(); return;
+    case 'train-pause': {
+      const t = state.training.find(x => x.id === b.closest('[data-train]').dataset.train);
+      if (t.pausedAt != null) { t.pausedTotal = (t.pausedTotal || 0) + (now() - t.pausedAt); t.pausedAt = null; } else t.pausedAt = now();
+      await save('training', t); break;
+    }
+    case 'train-remove': {
+      if (!(await confirmBox('Remove this training?', 'It disappears without counting as finished.', 'Remove'))) return;
+      const t = state.training.find(x => x.id === b.closest('[data-train]').dataset.train); t.deleted = true; await save('training', t); break;
+    }
+    // ----- Calder
+    case 'trade-new': openTrade(b.dataset.kind); return;
+    case 'trade-done': case 'trade-pass': {
+      const t = state.trades.find(x => x.id === b.closest('[data-trade]').dataset.trade);
+      t.state = act === 'trade-done' ? 'done' : 'declined'; t.closedAt = now(); await save('trades', t);
+      if (act === 'trade-done' && t.kind === 'buy') {
+        await save('cards', { id: uid(), campaignId: state.campaignId, item: t.item, pcId: t.pcId, note: 'bought through Calder', addedAt: now(), done: false });
+        toast(`${t.item} added to your cards to make.`);
+      }
+      break;
+    }
+    case 'trade-remove': {
+      if (!(await confirmBox('Remove this request?', 'Use this to fix a mistake.', 'Remove'))) return;
+      const t = state.trades.find(x => x.id === b.closest('[data-trade]').dataset.trade); t.deleted = true; await save('trades', t); break;
+    }
+    // ----- cards
+    case 'card-add': {
+      const item = $('#cardItem').value.trim(); if (!item) { $('#cardItem').focus(); return; }
+      await save('cards', { id: uid(), campaignId: state.campaignId, item, pcId: $('#cardPc').value, note: '', addedAt: now(), done: false }); break;
+    }
+    case 'card-remove': { const c = state.cards.find(x => x.id === b.closest('[data-card]').dataset.card); c.deleted = true; await save('cards', c); break; }
+    case 'card-undo': { const c = state.cards.find(x => x.id === b.closest('[data-card]').dataset.card); c.done = false; await save('cards', c); break; }
     case 'disease-edit': openDisease(disById(b.closest('[data-dis]').dataset.dis)); return;
     default: return;
   }
   render();
 });
 
+$('#view').addEventListener('click', e => {
+  const j = e.target.closest('[data-jump]'); if (!j) return;
+  e.preventDefault();
+  const el = document.getElementById('sec-' + j.dataset.jump); if (!el) return;
+  const top = el.getBoundingClientRect().top + window.scrollY - document.querySelector('.tabs').getBoundingClientRect().bottom - 10;
+  window.scrollTo({ top, behavior: 'smooth' });
+});
 $('#view').addEventListener('input', e => {
   const t = e.target;
   if (t.matches('textarea.grow')) autoGrow(t);
@@ -1227,6 +1480,7 @@ $('#view').addEventListener('input', e => {
 
 $('#view').addEventListener('change', async e => {
   const t = e.target;
+  if (t.dataset.actChange === 'card-done') { const c = state.cards.find(x => x.id === t.closest('[data-card]').dataset.card); c.done = t.checked; await save('cards', c); render(); return; }
   if (t.dataset.actChange === 'sheltered') { const c = campaign(); c.sheltered = t.checked; await save('campaigns', c); render(); return; }
   const s = curSession();
   if (t.dataset.field === 'number' && s) { s.number = Math.max(1, +t.value || s.number); await save('sessions', s); render(); return; }
