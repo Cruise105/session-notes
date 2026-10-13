@@ -282,6 +282,20 @@ dialog::backdrop { background: rgba(20, 14, 8, .45); }
 .wx-desc { font-size: 17px; }
 .wx-btns { display: flex; flex-direction: column; gap: 8px; }
 .badge.rime { background: var(--accent-soft); color: var(--accent); }
+.wx-now { font-size: 19px; margin: 2px 0; }
+.wx-now b { font-size: 24px; margin-right: 4px; }
+.wx-tl { font-size: 15px; color: var(--muted); margin-top: 2px; }
+.wx-chip-text b small { font-size: 13px; font-weight: 600; color: var(--muted); }
+.wx-hours { display: flex; gap: 6px; overflow-x: auto; margin-top: 14px; padding: 4px 2px 8px; scroll-snap-type: x proximity; -webkit-overflow-scrolling: touch; }
+.wx-hr { flex: 0 0 auto; width: 70px; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 8px 4px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); scroll-snap-align: start; font-size: 14px; }
+.wx-hr b { font-size: 16px; }
+.wx-hr .hr-t { color: var(--muted); font-size: 13px; white-space: nowrap; }
+.wx-hr .hr-p { font-size: 12px; color: var(--muted); text-transform: capitalize; text-align: center; line-height: 1.1; min-height: 1.1em; }
+.wx-hr.wet .hr-p { color: var(--accent); font-weight: 700; }
+.wx-hr.cur { border-color: var(--accent); border-width: 2px; }
+.wx-hr.cur .hr-t { color: var(--accent); font-weight: 700; }
+.wx-hr.past { opacity: .55; }
+.badge.now { background: var(--danger); color: #fff; border-color: transparent; }
 .wx-fx { display: flex; flex-direction: column; gap: 6px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
 .fx summary { cursor: pointer; font-weight: 700; color: var(--danger); padding: 4px 0; }
 .fx p { margin: 2px 0 6px 18px; font-size: 16px; }

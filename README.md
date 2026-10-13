@@ -12,6 +12,10 @@ Your printed session sheet as an app for the Galaxy Tab S9+. It runs in Chrome, 
 - **Shopping notes** for anything else from the session's shopping.
 - **Google Drive sync** between your PC and tablet, the same way the Bestiary does it, plus backup files.
 
+## Weather hour by hour
+
+The day's roll is now the day's forecast, spread over the hours like a weather app. The top bar shows the temperature and weather right now. The weather card shows what it's like at this moment, today's low and high, when the rain or snow starts and stops ("Snow from 6 PM", "Rain until 6 AM, again from 4 PM"), and a strip of every hour of the day that you can swipe through. Clouds build for a few hours before rain or snow, fog lifts in the morning, strong wind blows for part of the day, and a storm that's still going at midnight carries on into the next day. Near freezing, rain can turn to sleet or snow overnight. The DMG effects (extreme cold, strong wind, heavy rain or snow) say which hours they apply and are marked **Now** while they do. Survival temperature uses the wind at that hour. How the hours are spread out is homebrew, not from the DMG.
+
 ## Setting the clock
 
 Tap the date at the top. Type a **time of day** and tap **Set time**, or tap one of the quick times (Dawn, Morning, Noon, Afternoon, Dusk, Night, Midnight). The clock moves forward to the next time it's that o'clock, so survival, diseases and training all keep up. The +10 min, +1 hour, long rest, +1 day and +1 week buttons are still there, and so is setting an exact date.

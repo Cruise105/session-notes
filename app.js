@@ -7,7 +7,7 @@ import * as H from './health.js';
 import * as T from './downtime.js';
 import * as O from './outbreaks.js';
 
-const APP_VERSION = '1.6.1';
+const APP_VERSION = '1.7.0';
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const todayISO = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
@@ -72,6 +72,17 @@ function dropLaterWeather(locId, epoch, campaignId = state.campaignId) {
   }
 }
 const todayWx = () => weatherFor(hereLoc(), Math.floor(now() / C.DAY));
+// The day's weather hour by hour (yesterday and tomorrow decide whether a storm runs over midnight).
+function hoursFor(loc, epoch) {
+  const w = weatherFor(loc, epoch); if (!w) return null;
+  return W.hourly(loc, w, weatherFor(loc, epoch - 1), weatherFor(loc, epoch + 1));
+}
+// The weather right now where the party is.
+function wxNow() {
+  const loc = hereLoc(); if (!loc) return null;
+  const t = now(), ep = Math.floor(t / C.DAY), w = weatherFor(loc, ep), hrs = hoursFor(loc, ep);
+  return { w, hrs, cur: W.at(hrs, w, t - ep * C.DAY), hour: Math.floor((t - ep * C.DAY) / 60) };
+}
 
 // ---------- health helpers
 const liveDiseases = () => state.diseases.filter(d => !d.deleted).sort((a, b) => a.name.localeCompare(b.name));
@@ -97,9 +108,8 @@ function doublingFor(p) {
 }
 function tempNow(p) {
   const loc = hereLoc(); if (!loc) return null;
-  const t = now(), ep = Math.floor(t / C.DAY), w = weatherFor(loc, ep);
-  const air = H.tempAt(w, t - ep * C.DAY);
-  return { air, ...H.tempStage(air, surv(p).gear, !!campaign().sheltered, w.wind) };
+  const { cur } = wxNow();
+  return { air: cur.temp, ...H.tempStage(cur.temp, surv(p).gear, !!campaign().sheltered, cur.wind) };
 }
 function refreshFlags(p) {
   const sv = surv(p); let changed = false;
@@ -356,11 +366,11 @@ function renderHeader() {
   $('#clockDate').textContent = C.fmtDate(t);
   $('#clockTime').textContent = `${C.fmtTime(t)} · ${C.seasonOf(d.month, d.day)}`;
   $('#clockMoons').innerHTML = C.CAL.moons.map(m => moonSVG(m, d.epoch, 20)).join('');
-  const loc = hereLoc(), w = todayWx();
-  $('#wxBtn').innerHTML = loc && w
-    ? `${W.iconSVG(W.weatherIcon(w), 24)}<span class="wx-chip-text"><b>${W.fmtF(w.low)} / ${W.fmtF(w.high)}</b><span>${esc(loc.name)}</span></span>`
+  const loc = hereLoc(), wn = loc ? wxNow() : null;
+  $('#wxBtn').innerHTML = wn
+    ? `${W.iconSVG(W.weatherIcon(wn.cur), 24)}<span class="wx-chip-text"><b>${W.fmtF(wn.cur.temp)} <small>${esc(W.describe(wn.cur).split(',')[0])}</small></b><span>${esc(loc.name)} · ${W.fmtF(wn.w.low)} / ${W.fmtF(wn.w.high)}</span></span>`
     : `${W.iconSVG('cloud', 24)}<span class="wx-chip-text"><b>Weather</b><span>Pick a location</span></span>`;
-  $('#wxBtn').setAttribute('aria-label', loc && w ? `${loc.name}: ${W.describe(w)}, ${W.fmtF(w.low)} to ${W.fmtF(w.high)}. Open World.` : 'Pick a location for weather');
+  $('#wxBtn').setAttribute('aria-label', wn ? `${loc.name} now: ${W.describe(wn.cur)}, ${W.fmtF(wn.cur.temp)}. Today ${W.fmtF(wn.w.low)} to ${W.fmtF(wn.w.high)}. Open World.` : 'Pick a location for weather');
   document.querySelectorAll('.tabs [data-view]').forEach(b => b.setAttribute('aria-selected', String(b.dataset.view === state.view)));
 }
 
@@ -396,6 +406,7 @@ function render() {
 }
 
 function afterRender() {
+  document.querySelectorAll('.wx-hours').forEach(el => { const c = el.querySelector('.wx-hr.cur'); if (c) el.scrollLeft = Math.max(0, c.offsetLeft - el.offsetLeft - 8); });
   document.querySelectorAll('textarea.grow').forEach(autoGrow);
   document.querySelectorAll('canvas[data-ink]').forEach(cv => {
     const page = state.ink.find(i => i.id === cv.dataset.ink);
@@ -415,16 +426,19 @@ function favorBadge(p) {
 function wxCard({ big = false } = {}) {
   const loc = hereLoc();
   if (!loc) return `<section class="card wx-card empty"><div><h2>Weather</h2><p class="muted">Choose where the party is to get the day's weather.</p></div><button class="btn primary" data-act="pick-loc">Choose a location</button></section>`;
-  const t = now(), ep = Math.floor(t / C.DAY), w = weatherFor(loc, ep), dl = W.daylight(loc, ep), ec = W.effectiveClimate(loc);
+  const t = now(), ep = Math.floor(t / C.DAY), dl = W.daylight(loc, ep), ec = W.effectiveClimate(loc);
+  const { w, hrs, cur, hour } = wxNow();
   const mins = t - ep * C.DAY, isDay = mins >= dl.rise && mins < dl.set;
-  const fx = W.effects(w, loc);
+  const fx = W.effects(w, loc, hrs, hour);
+  const tl = W.timeline(hrs);
   return `<section class="card wx-card ${big ? 'big' : ''}">
     <div class="wx-main">
-      <div class="wx-glyph">${W.iconSVG(W.weatherIcon(w), big ? 64 : 48)}</div>
+      <div class="wx-glyph">${W.iconSVG(W.weatherIcon(cur), big ? 64 : 48)}</div>
       <div class="wx-text">
         <div class="wx-loc"><button class="link-btn wx-locname" data-act="pick-loc" title="Change location">${esc(loc.name)}</button>${ec.overrideName ? `<span class="badge rime">${esc(ec.overrideName)}</span>` : ''}</div>
-        <div class="wx-temps"><b>${W.fmtF(w.low)}</b> at night · <b>${W.fmtF(w.high)}</b> by day <span class="muted">· ${W.feelsLike(w)}</span></div>
-        <div class="wx-desc">${esc(W.describe(w))}${w.manual ? ' <span class="badge">Set by you</span>' : w.held ? ' <span class="muted small">(same as yesterday)</span>' : ''}</div>
+        <div class="wx-now"><b>${W.fmtF(cur.temp)}</b> <span>${esc(W.describe(cur))}</span> <span class="muted small">at ${esc(C.fmtTime(t))}</span></div>
+        <div class="wx-temps">Today: low <b>${W.fmtF(w.low)}</b> · high <b>${W.fmtF(w.high)}</b> <span class="muted">· ${W.feelsLike(w)}</span></div>
+        <div class="wx-desc"><span class="muted">Forecast:</span> ${esc(W.describe(w))}${w.manual ? ' <span class="badge">Set by you</span>' : w.held ? ' <span class="muted small">(same as yesterday)</span>' : ''}${tl ? `<div class="wx-tl">${esc(tl)}</div>` : ''}</div>
         <div class="wx-sun muted small">${dl.twilight ? `Perpetual twilight: the sun never fully rises` : `Sunrise ${W.fmtClock(dl.rise)} · Sunset ${W.fmtClock(dl.set)} · ${dl.hours.toFixed(1)} hours of daylight · ${isDay ? 'Daytime now' : 'Dark now'}`}</div>
       </div>
       <div class="wx-btns">
@@ -432,8 +446,19 @@ function wxCard({ big = false } = {}) {
         ${big ? `<button class="btn small" data-act="wx-reroll">Reroll today</button><button class="btn small" data-act="wx-set">Set today's weather</button>` : `<button class="btn small" data-act="goto-world">Weather tools</button>`}
       </div>
     </div>
-    ${fx.length ? `<div class="wx-fx">${fx.map(f => `<details class="fx fx-${f.id}"><summary>${esc(f.name)}</summary><p>${esc(f.text)} <span class="muted">(${esc(f.src)})</span></p></details>`).join('')}</div>` : ''}
+    ${hourStrip(hrs, hour)}
+    ${fx.length ? `<div class="wx-fx">${fx.map(f => `<details class="fx fx-${f.id}${f.now ? ' now' : ''}"><summary>${esc(f.name)}${f.now && f.id !== 'twilight' ? ' <span class="badge now">Now</span>' : ''}</summary><p>${esc(f.text)} <span class="muted">(${esc(f.src)})</span></p></details>`).join('')}</div>` : ''}
   </section>`;
+}
+// Hour-by-hour strip, starting at the current hour and running to midnight (earlier hours scroll back).
+function hourStrip(hrs, hour) {
+  const short = h => { const x = h % 12 || 12; return `${x} ${h < 12 ? 'AM' : 'PM'}`; };
+  return `<div class="wx-hours" role="list" aria-label="Today hour by hour" data-now="${hour}">${hrs.map(x => `<div class="wx-hr${x.hour === hour ? ' cur' : x.hour < hour ? ' past' : ''}${x.precip ? ' wet' : ''}" role="listitem" title="${esc(short(x.hour))}: ${esc(W.describe(x))}, ${W.fmtF(x.temp)}">
+      <span class="hr-t">${x.hour === hour ? 'Now' : short(x.hour)}</span>
+      ${W.iconSVG(W.weatherIcon(x), 22)}
+      <b>${W.fmtF(x.temp)}</b>
+      <span class="hr-p">${x.precip ? (x.precip === 2 ? 'Heavy ' : '') + x.precipType : x.wind === 2 ? 'Windy' : x.fog ? 'Fog' : '&nbsp;'}</span>
+    </div>`).join('')}</div>`;
 }
 
 // ---------- survival card (Session tab)
