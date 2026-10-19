@@ -46,7 +46,8 @@
 }
 
 * { box-sizing: border-box; }
-html { -webkit-text-size-adjust: 100%; }
+/* The app redraws the page after each tap, which confuses Chrome's scroll anchoring and makes the page jump. Keep it still. */
+html { -webkit-text-size-adjust: 100%; overflow-anchor: none; }
 body { margin: 0; background: var(--bg); color: var(--ink); font: 18px/1.45 var(--sans); min-height: 100vh; font-variant-numeric: lining-nums; }
 body.ink-open { overflow: hidden; }
 h1, h2, h3 { font-family: var(--serif); font-weight: 700; line-height: 1.15; margin: 0; }

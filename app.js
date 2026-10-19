@@ -7,7 +7,7 @@ import * as H from './health.js';
 import * as T from './downtime.js';
 import * as O from './outbreaks.js';
 
-const APP_VERSION = '1.7.0';
+const APP_VERSION = '1.7.1';
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const todayISO = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
