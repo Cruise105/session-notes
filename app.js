@@ -7,7 +7,7 @@ import * as H from './health.js';
 import * as T from './downtime.js';
 import * as O from './outbreaks.js';
 
-const APP_VERSION = '1.7.1';
+const APP_VERSION = '1.7.2';
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const todayISO = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
@@ -1991,6 +1991,17 @@ function updateReady() {
     let hadController = !!navigator.serviceWorker.controller;
     navigator.serviceWorker.register('sw.js').then(reg => {
       document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update().catch(() => {}); });
+      $('#updateCheckBtn').onclick = async () => {
+        if (!navigator.onLine) { toast("You're offline. Connect to the internet to check for updates."); return; }
+        toast('Checking for updates…');
+        try {
+          await reg.update();
+          const nw = reg.installing || reg.waiting;
+          if (!nw) { toast(`You have the newest version (${APP_VERSION}).`); return; }
+          toast('Downloading the update…');
+          // When it's ready, the app restarts into it on its own.
+        } catch (_) { toast("Couldn't reach the app's website. Try again in a minute."); }
+      };
     }).catch(() => {});
     navigator.serviceWorker.addEventListener('controllerchange', () => {
       if (!hadController) { hadController = true; return; } // first install, nothing to refresh
